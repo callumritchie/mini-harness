@@ -57,7 +57,6 @@ class WebUI(UI):
         self.lock = threading.Lock()
         self.loop = None
         self.queue = None
-        self.buffer = []  # events of the run in progress, so a page refresh can catch up
         self.pending = {}  # question id -> (concurrent Future, the request event)
         self.changes = {}  # path -> {"before": first before, "after": latest after}
         self.running = False
@@ -76,9 +75,6 @@ class WebUI(UI):
     def emit(self, type_, **data):
         event = {"type": type_, **data}
         with self.lock:
-            if type_ not in ("status", "info", "hello", "session_loaded", "done", "question_closed"):
-                self.buffer.append(event)
-                del self.buffer[:-2000]
             loop, queue = self.loop, self.queue
         if loop is not None:
             loop.call_soon_threadsafe(queue.put_nowait, event)
@@ -109,9 +105,6 @@ class WebUI(UI):
 
     def status(self, running):
         self.running = running
-        with self.lock:
-            if running:
-                self.buffer.clear()
         self.emit("status", running=running)
 
     def _ask(self, request):
@@ -368,13 +361,9 @@ def create_app(controller, webui, token, port, dev_origins=()):
         await websocket.accept()
         loop, queue = asyncio.get_running_loop(), asyncio.Queue()
         webui.attach(loop, queue)
-        with webui.lock:
-            replay = list(webui.buffer)
         await websocket.send_json({"type": "hello", "info": controller.info(), "running": webui.running, "demo": bool(getattr(controller.args, "demo", False))})
         for req in webui.pending_events():
             await websocket.send_json(req)
-        for event in replay:
-            await websocket.send_json(event)
 
         async def sender():
             while True:
@@ -422,7 +411,8 @@ def serve(args):
     """Start the server (blocks). Returns an exit code."""
     import uvicorn
 
-    token = secrets.token_urlsafe(24)
+    # A fresh random token each launch. MINI_CLAUDE_TOKEN pins it for development and the browser tests (never use it for real work).
+    token = os.environ.get("MINI_CLAUDE_TOKEN") or secrets.token_urlsafe(24)
     ui = WebUI()
     factory = None
     if getattr(args, "demo", False):

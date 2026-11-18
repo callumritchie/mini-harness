@@ -25,3 +25,5 @@ ui/coverage/
 .DS_Store
 .idea/
 .vscode/
+ui/test-results/
+ui/playwright-report/

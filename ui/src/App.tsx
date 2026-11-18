@@ -1,0 +1,82 @@
+import { useEffect } from "react";
+import { api, getToken } from "./api";
+import { Chat } from "./components/Chat";
+import { Composer } from "./components/Composer";
+import { GoalDialog } from "./components/GoalDialog";
+import { PermissionDialog } from "./components/PermissionDialog";
+import { RightPanel } from "./components/RightPanel";
+import { Sidebar } from "./components/Sidebar";
+import { TopBar } from "./components/TopBar";
+import type { ServerEvent, SessionRow, TranscriptItem } from "./protocol";
+import { connect } from "./socket";
+import { fromTranscript, useStore } from "./store";
+
+async function refreshSessions() {
+  try {
+    useStore.getState().patch({ sessions: await api<SessionRow[]>("sessions") });
+  } catch {
+    /* the sidebar just stays as it was */
+  }
+}
+
+export default function App() {
+  const connected = useStore((s) => s.connected);
+  const token = getToken();
+
+  useEffect(() => {
+    if (!token) return;
+    const { apply, patch, setSocket } = useStore.getState();
+    let firstHello = true;
+    const socket = connect(
+      token,
+      (ev: ServerEvent) => {
+        apply(ev);
+        if (ev.type === "hello") {
+          // a fresh page: draw the conversation so far from the server
+          if (firstHello && useStore.getState().items.length === 0) {
+            api<{ items: TranscriptItem[] }>(`session/${ev.info.session_id}`)
+              .then((r) => patch({ items: fromTranscript(r.items) }))
+              .catch(() => undefined);
+          }
+          firstHello = false;
+          refreshSessions();
+        } else if (ev.type === "done" || ev.type === "session_loaded") {
+          refreshSessions();
+        }
+      },
+      (up) => {
+        if (!up) patch({ connected: false });
+      },
+    );
+    setSocket(socket);
+    return () => {
+      setSocket(null);
+      socket.close();
+    };
+  }, [token]);
+
+  if (!token) {
+    return (
+      <div className="gate">
+        <h1>✦ mini-claude</h1>
+        <p>This page needs the private address the server printed in your terminal (it ends with <code>?token=…</code>).</p>
+        <p className="muted">Run <code>python3 agent.py --ui</code> and open the link it shows.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app">
+      <Sidebar />
+      <main className="main">
+        <TopBar />
+        {!connected && <div className="banner">Disconnected from the server. Reconnecting…</div>}
+        <Chat />
+        <Composer />
+      </main>
+      <RightPanel />
+      <PermissionDialog />
+      <GoalDialog />
+    </div>
+  );
+}

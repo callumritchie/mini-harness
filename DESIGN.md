@@ -5,7 +5,9 @@ records how it works and every decision. Update it whenever we make a decision.
 
 | File | What it holds |
 |---|---|
-| `agent.py` | the loop, subagents, headless and chat modes, command line |
+| `agent.py` | the loop, subagents, headless mode, command line |
+| `controller.py`, `terminal.py` | the state and actions behind every front end; the terminal chat on top of them |
+| `webserver.py`, `demo.py`, `ui/` | the local web UI: server, scripted demo model, React front end |
 | `session.py` | a conversation, its log, limits, cost totals |
 | `tools.py` | the tools: manuals, input rules, implementations |
 | `safety.py`, `permissions.py`, `judge.py` | what is safe, the approval gate, the optional AI judge |
@@ -112,7 +114,8 @@ DeepSeek is reached through its Anthropic-compatible endpoint (`https://api.deep
     skills and MCP servers in Claude Code's formats, a price list with a cost on every call, `--effort`, `--json`.
 20. **Not done yet:** server-side refusal fallbacks (we only report `refusal`), a `.gitignore` (the project is not a
     git repo yet), keeping the last few turns word for word across a compaction, MCP resources/prompts and non-stdio
-    servers, running subagents in parallel, DeepSeek-specific live testing (no key).
+    servers, running subagents in parallel, DeepSeek-specific live testing (no key), multi-user or multi-project web serving, editing
+    files from the web UI, git status/diff in the Changes tab.
 
 ## The session log
 
@@ -496,6 +499,56 @@ one), `/help`, `/exit`. `-c` continues the most recent session that has a prompt
 
 **Exit codes (headless):** 0 done; 1 error (no key, unknown model, bad arguments, API error); 3 did not finish (turn or spending
 limit, cut-off or refused reply, goal not met); 130 interrupted. Argument-parsing errors exit 2 (argparse).
+
+## Web UI
+
+`python3 agent.py --ui` starts a small server (`webserver.py`, FastAPI + uvicorn) and opens a React app (`ui/`, Vite + TypeScript) in the
+browser. It is the same engine as the terminal: both are front ends for `controller.Controller`.
+
+**Shape.** The Controller holds the session, model, permissions and settings and has one method per action (`send`, `stop`, `set_model`,
+`set_permissions`, `set_effort`, `set_limit`, `new_session`, `resume`, `compact`, `goal`, `context_data`, ...). A front end supplies a `UI`
+(`text`, `tool_call`, `tool_result`, `usage`, `notice`, `change`, `status`, `ask_permission`, `ask_user`). `terminal.TerminalUI` prints;
+`webserver.WebUI` turns each call into a JSON event, and for the two questions it blocks the agent's worker thread on a `Future` until the
+browser answers. The agent loop is synchronous, so each task runs in a worker thread and events cross to the asyncio loop with
+`call_soon_threadsafe`. One task at a time.
+
+**Stop.** A `threading.Event` on the run, checked between streamed chunks and before each tool, raises `tools.Interrupted` (a
+`KeyboardInterrupt`), so the same rollback as Ctrl-C applies. `bash` runs in its own process group and is killed on Stop; an open
+permission question is dropped (denied) too.
+
+**Protocol** (WebSocket `/ws`, JSON; REST under `/api`). Server to browser: `hello`, `info`, `status`, `text_delta`, `tool_call`,
+`tool_result`, `usage` (tokens, call cost, session total with completeness), `notice`, `file_change` (path, before, after),
+`permission_request` (title, the exact action lines with hidden characters already visible, findings, reasons, judge note), `ask_user`,
+`question_closed`, `done`, `session_loaded`, `error`. Browser to server: `send`, `cancel`, `answer_permission`, `answer_ask`, `set_model`,
+`set_permissions`, `set_effort`, `set_limit`, `new_session`, `resume`, `compact`, `goal`. REST: `GET /api/info`, `/sessions`,
+`/session/{id}` (the conversation redrawn from the log), `/files`, `/file?path=`, `/changes`, `/context`. Unanswered questions are re-sent
+when a page reconnects; a page loaded mid-run redraws the finished messages from `/api/session/{id}`.
+
+**Security** (the server can run commands as you, so this is not optional):
+
+- listens on `127.0.0.1` only; a random token per launch (`MINI_CLAUDE_TOKEN` pins it for development and tests only) is required on every
+  `/api` call and the WebSocket, printed in the URL that is opened, remembered in `sessionStorage` and removed from the address bar;
+- `Host` must be this server and `Origin` (when present) must be this server, so other web pages and DNS rebinding cannot reach it
+  (`MINI_CLAUDE_DEV_ORIGINS` adds the Vite dev server in development);
+- a file is shown only if it is inside the project, not under `.git`, not secret-looking (the same `safety.is_secret`), and after symlinks are
+  resolved; the tree lists secret files by name but they cannot be opened;
+- approvals still go through `Permissions.decide`. The dialog shows the action with hidden characters visible, focuses **Deny**, Escape denies,
+  and only a click on **Allow** approves (a test checks that Enter does not). Only a literal `true` allows;
+- everything sent to the browser is made printable (`safety.printable`), long strings are cut, model text is rendered as markdown without raw
+  HTML, remote images are not loaded, and responses carry a Content-Security-Policy and `no-store`.
+
+**The screen.** Left: sessions (new, resume, cost). Centre: the chat (streaming markdown, tool cards, inline questions, Stop, `/` command
+palette). Top: model, effort, permission mode (ask / judge / allow, with a confirmation for allow), context and cost meters. Right: Files
+(tree, viewer), Changes (a diff of every file written or edited in this session, captured live), Context (the `/context` breakdown, limit,
+compact). `/goal` opens a form. Diffs are captured live, so a resumed session shows its conversation but not earlier diffs.
+
+**Demo mode.** `--ui --demo` swaps in `demo.DemoClient`, a scripted fake model (keywords: hello, create, delete, ask, long, list, secret),
+and works in a throwaway folder, so the interface can be tried, developed and tested with no key and no cost.
+
+**Developing.** `ui/`: `npm run dev` (Vite on :5173, proxying `/api` and `/ws` to the server), `npm test` (reducer, diff, components),
+`npm run e2e` (Playwright drives the real server in demo mode through the whole walk-through, in light and dark with `THEME=dark`;
+`SCREENSHOTS=1` refreshes `docs/screenshots`). Python: `tests/test_server.py` covers auth, streaming order, approvals (deny, allow, a
+non-boolean answer), `ask_user`, Stop, refresh catch-up, sessions, and the file endpoints (secrets, `..`, symlinks, `.git`, binary).
 
 ## Tool patterns
 
