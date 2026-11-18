@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mini-claude"
+version = "0.1.0"
+description = "A small coding agent for Claude and DeepSeek, with a terminal mode and a local web UI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["anthropic>=0.79"]
+
+[project.optional-dependencies]
+ui = ["fastapi>=0.110", "uvicorn>=0.29"]
+dev = ["httpx>=0.27", "fastapi>=0.110", "uvicorn>=0.29"]
+
+[project.scripts]
+mini-claude = "agent:main"
+
+[tool.setuptools]
+py-modules = ["agent", "compaction", "context", "controller", "demo", "goal", "judge", "mcp", "permissions", "pricing",
+              "safety", "session", "sessionlog", "skills", "terminal", "tools", "webserver"]

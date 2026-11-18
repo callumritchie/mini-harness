@@ -1,0 +1,209 @@
+"""Tests for the web UI server, with the scripted demo model (no API key needed): python3 tests/test_server.py"""
+import faulthandler
+import os
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+os.environ["MINI_CLAUDE_HOME"] = tempfile.mkdtemp()
+faulthandler.dump_traceback_later(120, exit=True)  # a hang is a failure, not a stuck test run
+
+from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
+import agent
+import demo
+import webserver
+from controller import Controller
+
+PORT = 8765
+TOKEN = "test-token-123"
+project = Path(tempfile.mkdtemp()).resolve()
+os.chdir(project)
+(project / ".env").write_text("API_KEY=sk-live-should-never-be-served\n")
+(project / "app.py").write_text("print('hi')\n")
+(project / "sub").mkdir(); (project / "sub" / "notes.txt").write_text("notes\n")
+(project / ".git").mkdir(); (project / ".git" / "config").write_text("[remote]\nurl = https://user:pw@example.com/x.git\n")
+os.symlink("/etc/hosts", project / "link")
+
+
+def make(delay=0.0):
+    args = agent.build_parser().parse_args(["--demo"])
+    args.model = "claude-opus-5-5"
+    ui = webserver.WebUI()
+    ctl = Controller(args, ui, client_factory=lambda provider: demo.DemoClient(delay))
+    ctl.start()
+    app = webserver.create_app(ctl, ui, TOKEN, PORT)
+    return ctl, ui, TestClient(app, base_url=f"http://127.0.0.1:{PORT}")
+
+
+def collect(ws, until, limit=400):
+    """Read events until one of type `until` arrives; returns all events read."""
+    events = []
+    for _ in range(limit):
+        e = ws.receive_json()
+        events.append(e)
+        if e["type"] == until:
+            return events
+    raise AssertionError(f"never saw {until}: {[e['type'] for e in events][-10:]}")
+
+
+def types(events):
+    return [e["type"] for e in events]
+
+
+H = {"Authorization": f"Bearer {TOKEN}"}
+WS = {"Host": f"127.0.0.1:{PORT}"}  # the test client would otherwise send Host: testserver
+ctl, ui, client = make()
+
+# ---------- locked down ----------
+assert client.get("/api/info").status_code == 401
+assert client.get("/api/info", headers={"Authorization": "Bearer nope"}).status_code == 401
+assert client.get("/api/info", headers=H).status_code == 200
+assert client.get("/api/info", headers={**H, "Host": "evil.example.com"}).status_code == 403  # DNS rebinding
+assert client.get("/api/info?token=" + TOKEN).status_code == 200
+for url, headers in [("/ws", WS), ("/ws?token=wrong", WS), (f"/ws?token={TOKEN}", {**WS, "Origin": "http://evil.example.com"}), (f"/ws?token={TOKEN}", {})]:
+    try:
+        with client.websocket_connect(url, headers=headers) as ws:
+            ws.receive_json()
+        raise AssertionError(f"{url} {headers} was accepted")
+    except WebSocketDisconnect:
+        pass
+r = client.get("/")
+assert r.status_code == 200 and r.headers["cache-control"] == "no-store" and "default-src 'self'" in r.headers["content-security-policy"]
+
+# ---------- a chat turn streams events in order ----------
+with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
+    hello = ws.receive_json()
+    assert hello["type"] == "hello" and hello["demo"] is True and hello["info"]["model"] == "claude-opus-5-5" and hello["info"]["permissions"] == "ask"
+    ws.send_json({"type": "send", "text": "hello"})
+    ev = collect(ws, "done")
+    t = types(ev)
+    assert t[0] == "status" and ev[0]["running"] is True and t.count("text_delta") > 5 and "usage" in t and t[-2:] == ["status", "done"]
+    assert "".join(e["text"] for e in ev if e["type"] == "text_delta").startswith("Hello! I'm the **demo model**")
+    u = next(e for e in ev if e["type"] == "usage")
+    assert u["cost"] is not None and u["cost"] > 0 and u["total"]["complete"] is True and u["usage"]["input"] > 0
+    assert ev[-1]["stop_reason"] == "end_turn" and not ev[-1]["error"] and ev[-1]["info"]["turns"] == 1
+
+    # a write is a card plus a file_change, and it is safe inside the project (no question)
+    ws.send_json({"type": "send", "text": "create a file"})
+    ev = collect(ws, "done"); t = types(ev)
+    assert "permission_request" not in t and t.index("tool_call") < t.index("file_change") < t.index("tool_result")
+    call = next(e for e in ev if e["type"] == "tool_call"); assert call["name"] == "write_file" and call["input"]["path"] == "demo.py" and call["display"].startswith("write_file(demo.py")
+    fc = next(e for e in ev if e["type"] == "file_change"); assert fc["path"] == "demo.py" and fc["before"] is None and "def greet" in fc["after"]
+    assert (project / "demo.py").exists()
+    changes = client.get("/api/changes", headers=H).json(); assert changes[0]["path"] == "demo.py" and changes[0]["before"] is None and "def greet" in changes[0]["after"]
+
+    # a delete asks, with the exact command; deny keeps the file, allow removes it
+    ws.send_json({"type": "send", "text": "delete it"})
+    ev = collect(ws, "permission_request"); req = ev[-1]
+    assert req["title"] == "run a command" and any("rm demo.py" in l for l in req["display"]) and any("rm is not on the read-only list" in r for r in req["reasons"])
+    ws.send_json({"type": "answer_permission", "id": req["id"], "allow": False})
+    ev = collect(ws, "done")
+    assert (project / "demo.py").exists() and any(e["type"] == "tool_result" and e["is_error"] and "declined" in e["text"] for e in ev)
+    ws.send_json({"type": "send", "text": "delete it"})
+    req = collect(ws, "permission_request")[-1]
+    ws.send_json({"type": "answer_permission", "id": req["id"], "allow": True})
+    collect(ws, "done")
+    assert not (project / "demo.py").exists()
+    # a garbage answer is not a yes
+    ws.send_json({"type": "send", "text": "create a file"}); collect(ws, "done")
+    ws.send_json({"type": "send", "text": "delete it"})
+    req = collect(ws, "permission_request")[-1]
+    ws.send_json({"type": "answer_permission", "id": req["id"], "allow": "yes"})
+    collect(ws, "done"); assert (project / "demo.py").exists()
+
+    # secrets always ask, and the dialog says so
+    ws.send_json({"type": "send", "text": "show me the secret"})
+    req = collect(ws, "permission_request")[-1]; assert any("secrets" in r for r in req["reasons"])
+    ws.send_json({"type": "answer_permission", "id": req["id"], "allow": False}); ev = collect(ws, "done")
+    assert not any("sk-live" in str(e) for e in ev)
+
+    # ask_user: choices come to the browser and the answer comes back
+    ws.send_json({"type": "send", "text": "ask me to choose"})
+    ask = collect(ws, "ask_user")[-1]; assert ask["question"] == "Python or Go?" and ask["choices"] == ["Python", "Go"]
+    ws.send_json({"type": "answer_ask", "id": ask["id"], "answer": "Go"})
+    ev = collect(ws, "done"); assert "**Go**" in "".join(e["text"] for e in ev if e["type"] == "text_delta")
+
+    # settings
+    ws.send_json({"type": "set_permissions", "mode": "judge"}); assert collect(ws, "info")[-1]["info"]["permissions"] == "judge"
+    ws.send_json({"type": "set_permissions", "mode": "nope"}); assert "Unknown mode" in collect(ws, "error")[-1]["message"]; collect(ws, "info")  # (the info that follows)
+    ws.send_json({"type": "set_effort", "effort": "low"}); assert collect(ws, "info")[-1]["info"]["effort"] == "low"
+    ws.send_json({"type": "set_limit", "limit": 60000}); assert collect(ws, "info")[-1]["info"]["limit"] == 60000
+    ws.send_json({"type": "set_permissions", "mode": "ask"}); collect(ws, "info")
+    ws.send_json({"type": "bogus"}); assert "Unknown request" in collect(ws, "error")[-1]["message"]
+    ws.send_json({"type": "send", "text": "   "}); assert "Type something" in collect(ws, "error")[-1]["message"]
+
+    # the transcript of this session, as the UI draws it
+    sid = ctl.session.id
+    items = client.get(f"/api/session/{sid}", headers=H).json()["items"]
+    kinds = [i["kind"] for i in items]
+    assert kinds[0] == "user" and items[0]["text"] == "hello" and "tool" in kinds and "assistant" in kinds
+    tool = next(i for i in items if i["kind"] == "tool" and i["name"] == "write_file"); assert tool["result"].startswith("Created")
+    assert client.get("/api/session/nope", headers=H).status_code == 404
+    listed = client.get("/api/sessions", headers=H).json(); assert listed[0]["current"] and listed[0]["title"] == "hello" and listed[0]["cost"] > 0
+
+    # new session, then resume the first one
+    ws.send_json({"type": "new_session"}); loaded = collect(ws, "session_loaded")[-1]
+    assert loaded["items"] == [] and loaded["info"]["session_id"] != sid
+    ws.send_json({"type": "resume", "ref": sid[:8]}); loaded = collect(ws, "session_loaded")[-1]
+    assert loaded["info"]["session_id"] == sid and loaded["items"][0]["text"] == "hello"
+
+# ---------- Stop ----------
+ctl2, ui2, client2 = make(delay=0.02)
+(project / "demo.py").unlink(missing_ok=True)
+with client2.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
+    ws.receive_json()
+    ws.send_json({"type": "send", "text": "long"})
+    first = collect(ws, "text_delta")
+    ws.send_json({"type": "cancel"})
+    ev = collect(ws, "done")
+    assert ev[-1]["interrupted"] is True and ctl2.session.messages == []  # rolled back like Ctrl-C
+    ws.send_json({"type": "send", "text": "hello"}); assert collect(ws, "done")[-1]["interrupted"] is False  # and it works again
+    # Stop while a question is open
+    ws.send_json({"type": "send", "text": "delete it"})
+    ws.send_json({"type": "send", "text": "delete it"})  # (ignored: busy) ...
+    (project / "demo.py").write_text("x")
+    ws.send_json({"type": "cancel"})
+    ev = collect(ws, "done")
+    # a second send while busy is refused
+    ws.send_json({"type": "send", "text": "long"}); collect(ws, "text_delta")
+    ws.send_json({"type": "send", "text": "hello"}); assert "already running" in collect(ws, "error")[-1]["message"]
+    ws.send_json({"type": "cancel"}); collect(ws, "done")
+
+# ---------- a refresh mid-run catches up, and a pending question survives it ----------
+ctl3, ui3, client3 = make(delay=0.0)
+(project / "demo.py").write_text("x")
+with client3.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
+    ws.receive_json(); ws.send_json({"type": "send", "text": "delete it"}); req = collect(ws, "permission_request")[-1]
+with client3.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws2:  # the page was refreshed
+    hello = ws2.receive_json(); assert hello["type"] == "hello" and hello["running"] is True
+    again = ws2.receive_json(); assert again["type"] == "permission_request" and again["id"] == req["id"]
+    ws2.send_json({"type": "answer_permission", "id": req["id"], "allow": False}); collect(ws2, "done")
+
+# ---------- files: tree, viewer, and what is never served ----------
+tree = client.get("/api/files", headers=H).json()
+names = {e["name"]: e for e in tree["tree"]}
+assert ".git" not in names and names[".env"]["secret"] is True and names["app.py"]["secret"] is False and names["sub"]["children"][0]["name"] == "notes.txt"
+ok = client.get("/api/file", params={"path": "app.py"}, headers=H).json(); assert ok["content"] == "print('hi')\n" and ok["binary"] is False
+assert client.get("/api/file", params={"path": "sub/notes.txt"}, headers=H).json()["content"] == "notes\n"
+for bad in [".env", "../etc/passwd", "/etc/hosts", "link", ".git/config", "sub/../.env", "sub"]:
+    r = client.get("/api/file", params={"path": bad}, headers=H)
+    assert r.status_code in (403, 404), (bad, r.status_code)
+    assert "sk-live" not in r.text and "pw@example" not in r.text, bad
+(project / "bin.dat").write_bytes(b"\x00\x01\xff\xfe"); assert client.get("/api/file", params={"path": "bin.dat"}, headers=H).json()["binary"] is True
+(project / "evil.txt").write_text("a‮b\x1b[2Jc\r\nd"); shown = client.get("/api/file", params={"path": "evil.txt"}, headers=H).json()["content"]
+assert "‮" not in shown and "\x1b" not in shown and "⟨U+202E" in shown and "⟨ESC⟩" in shown and "\r" not in shown
+
+# ---------- tool input shown to the browser is made printable ----------
+assert webserver.clean({"command": "echo \x1b[2J" + "x" * 5000})["command"].startswith("echo ⟨ESC⟩[2J") and "more characters" in webserver.clean("y" * 5000)
+assert webserver.clean(["a​b"]) == ["a⟨U+200B ZERO WIDTH SPACE⟩b"]
+
+# ---------- context data and the engine hooks ----------
+data = client.get("/api/context", headers=H).json()
+assert data["total"] > 0 and "Tool definitions" in data["rows"] and data["limit"] == 60000
+print("ok")
