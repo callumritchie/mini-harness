@@ -417,7 +417,8 @@ def serve(args):
     factory = None
     if getattr(args, "demo", False):
         import demo
-        sandbox = tempfile.mkdtemp(prefix="mini-claude-demo-")  # the demo works in its own folder, never in yours
+        sandbox = Path(tempfile.mkdtemp(prefix="mini-claude-demo-")) / "demo-project"  # the demo works in its own folder, never in yours
+        sandbox.mkdir()
         os.chdir(sandbox)
         Path(".env").write_text("DEMO_KEY=not-a-real-secret\n")
         Path("README.md").write_text("# Demo folder\n\nThis is a throwaway folder for `--demo`.\n")
