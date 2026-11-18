@@ -603,6 +603,16 @@ The full text the model sees is the `description` of each entry in `tools.TOOLS`
 
 ## Test log
 
+- 2026-11-18, web UI: Playwright drove the real server in demo mode through the whole walk-through in Chromium (light and dark): streaming
+  markdown, a written file as a tool card and a diff, the approval dialog for `rm` (Deny focused; Enter does not approve; Deny keeps the
+  file, Allow removes it), an `ask_user` choice, Stop, permission-mode switch, the context panel, new/resume session, slash commands, a
+  locked `.env` in the tree, no console errors; a wrong token gets 401 and the page explains. Against the real API (`claude-opus-5-5`): "say
+  hi" streamed and cost $0.0195, "create hi.txt then delete it with rm" showed the exact command, Allow deleted it, the Changes tab showed the
+  diff, `/api/file?path=.env` returned 403 and the secret appears nowhere in the server log or session log. CI on GitHub: Python 3.10-3.13 and the
+  UI job (typecheck, 25 unit/component tests, build, browser tests) all pass. A fresh clone (`pip install -e ".[ui]"`, `npm ci`,
+  `npm run build`, `mini-claude --ui --demo`) works, and the agent works with Anthropic SDK 2.10 as well as 0.79 (plain, tools, web search, effort).
+  CI found two real problems that local runs hid: a lockfile `npm ci` rejected on Linux, and `uvicorn` without `[standard]` (no WebSocket library).
+
 - 2026-11-18, safety, search, judge: grep for every function in `agent.py` with default permissions and no flags found all 36
   top-level functions with no prompt (36 by `grep -c`). `grep` for `API_KEY` in a `.env` returned only the skip notice; the secret
   value appears nowhere in output, stderr or the log. Judge on: "run `python3 -m unittest test_ok -v`" was allowed by the judge
