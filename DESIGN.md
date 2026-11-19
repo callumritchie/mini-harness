@@ -70,7 +70,7 @@ DeepSeek is reached through its Anthropic-compatible endpoint (`https://api.deep
 4. **Two modes.** Chat by default, headless with `-p "task"`. Headless prints only the final answer on stdout; tool
    activity and errors go to stderr.
 5. **Provider is picked from the model name** (`deepseek*` means DeepSeek). With no `--model`, the default is
-   `claude-opus-5-5`, or `deepseek-flash` if only a DeepSeek key is set. (DeepSeek's pricing page now lists
+   `claude-sonnet-5-5`, or `deepseek-flash` if only a DeepSeek key is set. (DeepSeek's pricing page now lists
    `deepseek-flash` and `deepseek-v4-pro`, not `deepseek-chat`; `deepseek-flash` is untested live.)
 6. **Key handling.** Environment variables only. No `.env` file, no config file, never printed. A missing key gives
    setup instructions. Not supported: `ant auth login` OAuth profiles.

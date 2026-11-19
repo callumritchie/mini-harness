@@ -1,9 +1,8 @@
-import { useState } from "react";
 import { useStore } from "../store";
 import type { Mode } from "../protocol";
 import { formatCost, formatTokens } from "../lib/lang";
 
-const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1", "deepseek-flash", "deepseek-v4-pro"];
+const OTHER = "__other__";
 
 export function TopBar() {
   const info = useStore((s) => s.info);
@@ -12,7 +11,6 @@ export function TopBar() {
   const demo = useStore((s) => s.demo);
   const running = useStore((s) => s.running);
   const s = useStore();
-  const [model, setModel] = useState<string | null>(null);
   if (!info) return <header className="topbar"><span className="muted">Connecting…</span></header>;
 
   const context = last ? last.input + last.cache_read + last.cache_write : 0;
@@ -30,10 +28,16 @@ export function TopBar() {
       <div className="spacer" />
 
       <label className="field">Model
-        <input list="models" value={model ?? info.model} disabled={running} onChange={(e) => setModel(e.target.value)}
-          onBlur={() => { if (model && model !== info.model) s.setModel(model); setModel(null); }}
-          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
-        <datalist id="models">{MODELS.map((m) => <option key={m} value={m} />)}</datalist>
+        <select className="model" value={info.model} disabled={running} title={info.models.find((m) => m.id === info.model)?.note}
+          onChange={(e) => {
+            if (e.target.value !== OTHER) return s.setModel(e.target.value);
+            const name = window.prompt("Model id (for example claude-sonnet-4-6):")?.trim();
+            if (name && name !== info.model) s.setModel(name);
+          }}>
+          {!info.models.some((m) => m.id === info.model) && <option value={info.model}>{info.model}</option>}
+          {info.models.map((m) => <option key={m.id} value={m.id} title={m.note}>{m.id}</option>)}
+          <option value={OTHER}>Other…</option>
+        </select>
       </label>
       <label className="field">Effort
         <select value={info.effort ?? "default"} onChange={(e) => s.setEffort(e.target.value === "default" ? null : e.target.value)}>

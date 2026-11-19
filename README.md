@@ -57,7 +57,7 @@ current turn, not the program.
 
 ```sh
 python3 agent.py --json -p "say hi"                 # one JSON line: result, tokens, cost
-python3 agent.py --effort low --model claude-sonnet-5-5
+python3 agent.py --effort low --model claude-opus-5-5   # the default is Sonnet 5.5; /model lists the others
 python3 agent.py --permissions judge
 python3 agent.py --goal "add add() with a test" --verify "python3 -m unittest -q" --allow "python3 -m unittest"
 ```

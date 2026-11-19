@@ -19,6 +19,7 @@ export interface Info {
   client_ready: boolean;
   client_error: string | null;
   efforts: string[];
+  models: { id: string; note: string }[];
   modes: Mode[];
   mode_help: Record<string, string>;
   agents_md: boolean;

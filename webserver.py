@@ -422,7 +422,8 @@ def serve(args):
         os.chdir(sandbox)
         Path(".env").write_text("DEMO_KEY=not-a-real-secret\n")
         Path("README.md").write_text("# Demo folder\n\nThis is a throwaway folder for `--demo`.\n")
-        args.model = args.model or "claude-opus-5-5"
+        import agent
+        args.model = args.model or agent.DEFAULT_MODELS["anthropic"]
         factory = lambda provider: demo.DemoClient()  # noqa: E731
     controller = Controller(args, ui, client_factory=factory)
     controller.start()

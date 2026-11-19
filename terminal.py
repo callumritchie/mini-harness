@@ -155,7 +155,7 @@ class Chat:
             "/new                 start a new session (a new log; AGENTS.md and skills are read fresh)",
             "/sessions            list this folder's sessions, newest first, titled by their first prompt",
             "/resume [n|id]       continue a session (no argument: the most recent other one)",
-            "/model [name]        show or switch model",
+            "/model [n|name]     list the models, or switch (a number from the list, or any model id)",
             "/permissions [mode]  ask (default), judge, or allow: who decides about risky actions",
             "/effort [level]      reasoning effort: low, medium, high, xhigh, max (or 'default')",
             "/context             what fills the context window, and what the session has cost",
@@ -195,7 +195,12 @@ class Chat:
     def cmd_model(self, arg):
         if not arg:
             print(f"Current model: {self.ctl.model}")
+            for i, (name, note) in enumerate(agent.MODEL_CHOICES, 1):
+                print(f"  {i}) {'*' if name == self.ctl.model else ' '} {name}: {note}")
+            print("Switch with /model N or /model <any model id>.")
             return
+        if arg.isdigit() and 1 <= int(arg) <= len(agent.MODEL_CHOICES):
+            arg = agent.MODEL_CHOICES[int(arg) - 1][0]
         note = self.ctl.set_model(arg)
         print(f"Model set to {self.ctl.model}")
         if note:

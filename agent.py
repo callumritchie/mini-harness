@@ -23,7 +23,16 @@ from permissions import MODES, Permissions
 from session import Limits, NotFinished, Session, UserError
 
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic")
-DEFAULT_MODELS = {"anthropic": "claude-opus-5-5", "deepseek": "deepseek-flash"}
+DEFAULT_MODELS = {"anthropic": "claude-sonnet-5-5", "deepseek": "deepseek-flash"}
+# The models offered in the picker (any other model id still works: type it after /model, or choose "Other" in the web UI).
+MODEL_CHOICES = [
+    ("claude-sonnet-5-5", "Sonnet 5.5: the default; fast and capable for most work"),
+    ("claude-opus-5-5", "Opus 5.5: strongest reasoning, for hard problems"),
+    ("claude-haiku-5-5", "Haiku 5.5: cheapest and fastest, for simple tasks"),
+    ("claude-fable-5-1", "Fable 5.1: Anthropic's top tier, the most expensive"),
+    ("deepseek-flash", "DeepSeek Flash: low cost (needs DEEPSEEK_API_KEY)"),
+    ("deepseek-v4-pro", "DeepSeek V4 Pro (needs DEEPSEEK_API_KEY)"),
+]
 KEY_VARS = {"anthropic": "ANTHROPIC_API_KEY", "deepseek": "DEEPSEEK_API_KEY"}
 MAX_TOKENS = {"anthropic": 32000, "deepseek": 8192}
 DEFAULT_LIMIT = 150_000  # tokens in one request before the conversation is compacted
@@ -508,7 +517,7 @@ def build_parser():
     ap.add_argument("-p", "--print", metavar="TASK", help="headless: run TASK, print the answer, exit")
     ap.add_argument("--goal", metavar="TEXT", help="headless goal mode: keep working until done with evidence, then run --verify, then a reviewer")
     ap.add_argument("--verify", metavar="CMD", help='with --goal: your check, run when the work claims to be done, e.g. "pytest -q"')
-    ap.add_argument("--model", help="model id; names starting with 'deepseek' use DeepSeek (default depends on which key is set)")
+    ap.add_argument("--model", help="model id; names starting with 'deepseek' use DeepSeek (default is claude-sonnet-5-5, or deepseek-flash if only a DeepSeek key is set)")
     ap.add_argument("--effort", choices=EFFORTS, help="reasoning effort for the run (Claude models)")
     ap.add_argument("--json", action="store_true", help="headless: print one machine-readable JSON line (result, usage, cost) and nothing else on stdout")
     ap.add_argument("--max-turns", type=positive_int, metavar="N", help="stop after N model calls (default 50; 100 for a goal)")

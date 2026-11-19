@@ -4,7 +4,7 @@ import type { Info, ServerEvent } from "../src/protocol";
 
 const info: Info = {
   project: "/p", model: "claude-opus-5-5", provider: "anthropic", permissions: "ask", effort: null, limit: 150000, session_id: "s1",
-  client_ready: true, client_error: null, efforts: [], modes: ["ask", "judge", "allow"], mode_help: {}, agents_md: false, skills: [], mcp_tools: [],
+  client_ready: true, client_error: null, efforts: [], models: [], modes: ["ask", "judge", "allow"], mode_help: {}, agents_md: false, skills: [], mcp_tools: [],
   price_known: true, cost: { usd: 0, complete: true, note: null }, turns: 0, compactions: 0,
 };
 

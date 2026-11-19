@@ -82,7 +82,7 @@ class Controller:
         return {
             "project": str(Path.cwd()), "model": self.model, "provider": self.provider, "permissions": self.permissions.mode,
             "effort": self.args.effort, "limit": self.limit, "session_id": s.id, "client_ready": self.client is not None,
-            "client_error": self.client_error, "efforts": list(agent.EFFORTS), "modes": list(MODES), "mode_help": MODE_HELP,
+            "client_error": self.client_error, "efforts": list(agent.EFFORTS), "models": [{"id": i, "note": n} for i, n in agent.MODEL_CHOICES], "modes": list(MODES), "mode_help": MODE_HELP,
             "agents_md": context.AGENTS_FILE in s.system_parts, "skills": [x["name"] for x in skills.discover(Path.cwd())[0]],
             "mcp_tools": sorted(self.mcp.tools) if self.mcp else [], "price_known": pricing.prices(self.model) is not None,
             "cost": {"usd": usd, "complete": complete, "note": note}, "turns": s.totals["calls"], "compactions": s.compactions,
