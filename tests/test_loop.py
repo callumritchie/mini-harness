@@ -14,7 +14,7 @@ from types import SimpleNamespace as NS
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-os.environ["MINI_CLAUDE_HOME"] = tempfile.mkdtemp()  # keep session logs out of the real home folder
+os.environ["MINI_HARNESS_HOME"] = tempfile.mkdtemp()  # keep session logs out of the real home folder
 
 import agent
 import compaction
@@ -522,4 +522,21 @@ r = run_agent("-p", "hi"); assert r.returncode == 1 and "No anthropic API key" i
 r = run_agent("-p", "hi", "--json"); line = json.loads(r.stdout.strip().splitlines()[-1]); assert r.returncode == 1 and line["ok"] is False and "No anthropic API key" in line["error"]
 assert run_agent("--max-turns", "0", "-p", "x").returncode == 2 and run_agent("--verify", "true", "-p", "x").returncode == 1 and run_agent("-p", "x", "--goal", "y").returncode == 1
 assert run_agent("--allow", "write:", "-p", "x").returncode == 2 and run_agent("--json").returncode == 1
+# the project used to be called mini-claude: its old log folder is still found, and the new names win when both exist
+import sessionlog
+saved = {k: os.environ.pop(k, None) for k in ("MINI_HARNESS_HOME", "MINI_CLAUDE_HOME")}
+fake_home = Path(tempfile.mkdtemp()); (fake_home / ".mini-claude").mkdir()
+real_home = Path.home
+try:
+    Path.home = classmethod(lambda cls: fake_home)
+    assert sessionlog.home() == fake_home / ".mini-claude"  # only the old folder exists: keep using it
+    (fake_home / ".mini-harness").mkdir()
+    assert sessionlog.home() == fake_home / ".mini-harness"  # the new one exists: it wins
+    os.environ["MINI_CLAUDE_HOME"] = "/old-env"; assert sessionlog.home() == Path("/old-env")  # the old variable name still works
+    os.environ["MINI_HARNESS_HOME"] = "/new-env"; assert sessionlog.home() == Path("/new-env")  # the new one wins
+finally:
+    Path.home = real_home
+    for k in ("MINI_HARNESS_HOME", "MINI_CLAUDE_HOME"):
+        os.environ.pop(k, None)
+    os.environ["MINI_HARNESS_HOME"] = saved["MINI_HARNESS_HOME"]
 print("ok")

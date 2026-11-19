@@ -55,7 +55,7 @@ export function Composer() {
           ref={ref}
           value={text}
           rows={1}
-          placeholder={connected ? (running ? "Working… press Stop to interrupt" : "Message mini-claude, or / for commands") : "Connecting…"}
+          placeholder={connected ? (running ? "Working… press Stop to interrupt" : "Message Mini Harness, or / for commands") : "Connecting…"}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (matches.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {

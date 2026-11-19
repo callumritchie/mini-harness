@@ -19,7 +19,7 @@ test("the whole demo walk-through", async ({ page }) => {
   await page.screenshot({ path: shot("01-empty") });
 
   // streaming chat, with markdown and a code block
-  const box = page.getByPlaceholder(/Message mini-claude/);
+  const box = page.getByPlaceholder(/Message Mini Harness/);
   await box.fill("hello");
   await box.press("Enter");
   await expect(page.locator(".msg.user .bubble")).toHaveText("hello");

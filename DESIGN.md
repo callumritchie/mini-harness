@@ -1,4 +1,4 @@
-# mini-claude design doc
+# Mini Harness design doc
 
 A small coding agent in Python, modelled on Claude Code's conventions. The short version is in `README.md`; this file
 records how it works and every decision. Update it whenever we make a decision.
@@ -122,8 +122,8 @@ DeepSeek is reached through its Anthropic-compatible endpoint (`https://api.deep
 Every message is saved the moment it happens, so a crash (or `kill -9`, or a closed terminal) loses at most the
 reply that was being streamed. `-c` rebuilds the last session in the current folder from its log.
 
-**Where:** `~/.mini-claude/sessions/<folder path with / replaced by ->/<UTC start time>-<8 hex>.jsonl` (subagent and reviewer logs go in a `subagents/` folder beside them, so they are never listed or resumed)
-(override the root with `MINI_CLAUDE_HOME`). It is outside the project on purpose, since a log holds everything said
+**Where:** `~/.mini-harness/sessions/<folder path with / replaced by ->/<UTC start time>-<8 hex>.jsonl` (subagent and reviewer logs go in a `subagents/` folder beside them, so they are never listed or resumed)
+(override the root with `MINI_HARNESS_HOME`). It is outside the project on purpose, since a log holds everything said
 and every file the agent read. The folder is mode 700, files 600. "Last session" means the one written to most
 recently in this folder. `/clear` starts a new session and a new file.
 
@@ -500,6 +500,14 @@ one), `/help`, `/exit`. `-c` continues the most recent session that has a prompt
 **Exit codes (headless):** 0 done; 1 error (no key, unknown model, bad arguments, API error); 3 did not finish (turn or spending
 limit, cut-off or refused reply, goal not met); 130 interrupted. Argument-parsing errors exit 2 (argparse).
 
+## Name
+
+The project was called `mini-claude` until 2026-11-19, then renamed to Mini Harness so the name does not suggest it only works with Claude.
+Compatibility: `sessionlog.home()` keeps using `~/.mini-claude` if that folder exists and `~/.mini-harness` does not (nothing is moved),
+and `MINI_CLAUDE_HOME`, `MINI_CLAUDE_TOKEN`, `MINI_CLAUDE_DEV_ORIGINS` and `MINI_CLAUDE_BACKEND` are read when the new names are not set.
+Dated entries in the test log below keep the old name as written. References to Claude as a model, or to Claude Code's skill and
+`.mcp.json` formats, are unchanged on purpose.
+
 ## Web UI
 
 `python3 agent.py --ui` starts a small server (`webserver.py`, FastAPI + uvicorn) and opens a React app (`ui/`, Vite + TypeScript) in the
@@ -526,10 +534,10 @@ when a page reconnects; a page loaded mid-run redraws the finished messages from
 
 **Security** (the server can run commands as you, so this is not optional):
 
-- listens on `127.0.0.1` only; a random token per launch (`MINI_CLAUDE_TOKEN` pins it for development and tests only) is required on every
+- listens on `127.0.0.1` only; a random token per launch (`MINI_HARNESS_TOKEN` pins it for development and tests only) is required on every
   `/api` call and the WebSocket, printed in the URL that is opened, remembered in `sessionStorage` and removed from the address bar;
 - `Host` must be this server and `Origin` (when present) must be this server, so other web pages and DNS rebinding cannot reach it
-  (`MINI_CLAUDE_DEV_ORIGINS` adds the Vite dev server in development);
+  (`MINI_HARNESS_DEV_ORIGINS` adds the Vite dev server in development);
 - a file is shown only if it is inside the project, not under `.git`, not secret-looking (the same `safety.is_secret`), and after symlinks are
   resolved; the tree lists secret files by name but they cannot be opened;
 - approvals still go through `Permissions.decide`. The dialog shows the action with hidden characters visible, focuses **Deny**, Escape denies,

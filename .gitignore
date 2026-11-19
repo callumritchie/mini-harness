@@ -8,7 +8,7 @@ dist/
 venv/
 .pytest_cache/
 
-# Secrets and local state (the agent's session logs live in ~/.mini-claude, outside the project)
+# Secrets and local state (the agent's session logs live in ~/.mini-harness, outside the project)
 .env
 .env.*
 !.env.example

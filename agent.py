@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mini-claude: a small coding agent. See README.md for how to run it and DESIGN.md for why it is built this way."""
+"""mini-harness: a small coding agent. See README.md for how to run it and DESIGN.md for why it is built this way."""
 import argparse
 import atexit
 import dataclasses
@@ -532,7 +532,7 @@ def build_parser():
     ap.add_argument("--compaction", choices=["auto", "server", "client"], default="auto",
                     help="auto: Anthropic's server-side compaction on Claude, a model-written summary elsewhere; or force one")
     ap.add_argument("--no-web-search", action="store_true", help="do not offer the provider's web search tool")
-    ap.add_argument("--ui", action="store_true", help="start the local web UI and open it in your browser (needs: pip install 'mini-claude[ui]')")
+    ap.add_argument("--ui", action="store_true", help="start the local web UI and open it in your browser (needs: pip install 'mini-harness[ui]')")
     ap.add_argument("--port", type=int, default=8765, metavar="N", help="with --ui: the port to listen on (default 8765; 127.0.0.1 only)")
     ap.add_argument("--no-open", action="store_true", help="with --ui: do not open a browser; just print the address")
     ap.add_argument("--demo", action="store_true", help="with --ui: use a scripted fake model, no API key or cost (for trying the interface)")

@@ -193,7 +193,7 @@ def build_tree(root):
 
 
 def create_app(controller, webui, token, port, dev_origins=()):
-    app = FastAPI(title="mini-claude", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="mini-harness", docs_url=None, redoc_url=None, openapi_url=None)
     webui.controller = controller
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     allowed_origins = {f"http://{h}" for h in allowed_hosts} | set(dev_origins)
@@ -399,7 +399,7 @@ def create_app(controller, webui, token, port, dev_origins=()):
                 return FileResponse(target)
             return FileResponse(DIST / "index.html")
         return HTMLResponse(
-            "<h1>mini-claude</h1><p>The web UI has not been built yet. Run <code>cd ui &amp;&amp; npm install &amp;&amp; npm run build</code>, "
+            "<h1>Mini Harness</h1><p>The web UI has not been built yet. Run <code>cd ui &amp;&amp; npm install &amp;&amp; npm run build</code>, "
             "then restart. (For development: <code>npm run dev</code> in <code>ui/</code>.)</p>", status_code=200)
 
     return app
@@ -411,13 +411,13 @@ def serve(args):
     """Start the server (blocks). Returns an exit code."""
     import uvicorn
 
-    # A fresh random token each launch. MINI_CLAUDE_TOKEN pins it for development and the browser tests (never use it for real work).
-    token = os.environ.get("MINI_CLAUDE_TOKEN") or secrets.token_urlsafe(24)
+    # A fresh random token each launch. MINI_HARNESS_TOKEN pins it for development and the browser tests (never use it for real work).
+    token = os.environ.get("MINI_HARNESS_TOKEN") or os.environ.get("MINI_CLAUDE_TOKEN") or secrets.token_urlsafe(24)  # MINI_CLAUDE_* = the old names
     ui = WebUI()
     factory = None
     if getattr(args, "demo", False):
         import demo
-        sandbox = Path(tempfile.mkdtemp(prefix="mini-claude-demo-")) / "demo-project"  # the demo works in its own folder, never in yours
+        sandbox = Path(tempfile.mkdtemp(prefix="mini-harness-demo-")) / "demo-project"  # the demo works in its own folder, never in yours
         sandbox.mkdir()
         os.chdir(sandbox)
         Path(".env").write_text("DEMO_KEY=not-a-real-secret\n")
@@ -427,10 +427,10 @@ def serve(args):
         factory = lambda provider: demo.DemoClient()  # noqa: E731
     controller = Controller(args, ui, client_factory=factory)
     controller.start()
-    dev = tuple(o for o in os.environ.get("MINI_CLAUDE_DEV_ORIGINS", "").split(",") if o)
+    dev = tuple(o for o in (os.environ.get("MINI_HARNESS_DEV_ORIGINS") or os.environ.get("MINI_CLAUDE_DEV_ORIGINS") or "").split(",") if o)
     app = create_app(controller, ui, token, args.port, dev_origins=dev)
     url = f"http://127.0.0.1:{args.port}/?token={token}"
-    print(f"mini-claude web UI for {Path.cwd()}" + ("  [DEMO: scripted model, nothing is real]" if getattr(args, "demo", False) else ""))
+    print(f"mini-harness web UI for {Path.cwd()}" + ("  [DEMO: scripted model, nothing is real]" if getattr(args, "demo", False) else ""))
     print(f"Open: {url}")
     print("(Only this computer can reach it. Press Ctrl-C to stop.)")
     if not args.no_open:

@@ -85,7 +85,7 @@ class Chat:
 
     def banner(self):
         c, s = self.ctl, self.ctl.session
-        print(f"mini-claude  model: {c.model}  permissions: {c.permissions.mode}  (/help for commands, Ctrl-C stops a turn, Ctrl-D exits)")
+        print(f"Mini Harness  model: {c.model}  permissions: {c.permissions.mode}  (/help for commands, Ctrl-C stops a turn, Ctrl-D exits)")
         if context.AGENTS_FILE in s.system_parts:
             print(f"Loaded {context.AGENTS_FILE} ({s.system_parts[context.AGENTS_FILE]:,} characters) into the instructions.")
         if "Skills (names only)" in s.system_parts:

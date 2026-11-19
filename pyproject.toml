@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mini-claude"
+name = "mini-harness"
 version = "0.1.0"
 description = "A small coding agent for Claude and DeepSeek, with a terminal mode and a local web UI."
 readme = "README.md"
@@ -16,7 +16,7 @@ ui = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
 dev = ["httpx>=0.27", "fastapi>=0.110", "uvicorn[standard]>=0.29"]
 
 [project.scripts]
-mini-claude = "agent:main"
+mini-harness = "agent:main"
 
 [tool.setuptools]
 py-modules = ["agent", "compaction", "context", "controller", "demo", "goal", "judge", "mcp", "permissions", "pricing",

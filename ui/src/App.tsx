@@ -58,7 +58,7 @@ export default function App() {
   if (!token) {
     return (
       <div className="gate">
-        <h1>✦ mini-claude</h1>
+        <h1>Mini Harness</h1>
         <p>This page needs the private address the server printed in your terminal (it ends with <code>?token=…</code>).</p>
         <p className="muted">Run <code>python3 agent.py --ui</code> and open the link it shows.</p>
       </div>

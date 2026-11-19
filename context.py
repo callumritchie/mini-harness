@@ -10,7 +10,7 @@ AGENTS_FILE = "AGENTS.md"
 MAX_AGENTS_CHARS = 20_000
 
 RULES = """\
-You are mini-claude, a small coding agent running in a terminal.
+You are Mini Harness, a small coding agent running in a terminal.
 
 Rules:
 - Look before you answer: use your tools to read the project instead of guessing what is in it.

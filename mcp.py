@@ -117,7 +117,7 @@ class Manager:
         client = Client(expand_env(conf["command"]), [expand_env(str(a)) for a in conf.get("args", [])], env, str(project))
         try:
             client.request("initialize", {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
-                                          "clientInfo": {"name": "mini-claude", "version": "1"}}, STARTUP_SECONDS)
+                                          "clientInfo": {"name": "mini-harness", "version": "1"}}, STARTUP_SECONDS)
             client.notify("notifications/initialized")
             found, cursor = [], None
             while True:

@@ -3,8 +3,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // In development the UI runs on :5173 and forwards /api and /ws to the Python server (default :8765).
-// Start the server with MINI_CLAUDE_DEV_ORIGINS=http://localhost:5173 so it accepts that origin.
-const backend = process.env.MINI_CLAUDE_BACKEND ?? "http://127.0.0.1:8765";
+// Start the server with MINI_HARNESS_DEV_ORIGINS=http://localhost:5173 so it accepts that origin.
+const backend = process.env.MINI_HARNESS_BACKEND ?? process.env.MINI_CLAUDE_BACKEND ?? "http://127.0.0.1:8765";
 
 export default defineConfig({
   plugins: [react()],

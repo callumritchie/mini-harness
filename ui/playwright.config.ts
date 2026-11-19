@@ -15,7 +15,7 @@ export default defineConfig({
   webServer: {
     command: `python3 ../agent.py --ui --demo --no-open --port ${PORT}`,
     url: `http://127.0.0.1:${PORT}/?token=e2e-token`,
-    env: { MINI_CLAUDE_TOKEN: "e2e-token", MINI_CLAUDE_HOME: "/tmp/mini-claude-e2e-home" },
+    env: { MINI_HARNESS_TOKEN: "e2e-token", MINI_HARNESS_HOME: "/tmp/mini-harness-e2e-home" },
     reuseExistingServer: false,
     timeout: 30_000,
   },

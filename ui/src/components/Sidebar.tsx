@@ -12,7 +12,7 @@ export function Sidebar() {
   if (!open) return null;
   return (
     <aside className="sidebar">
-      <div className="brand"><span className="logo">✦</span> mini-claude</div>
+      <div className="brand"><span className="logo">✦</span> mini-harness</div>
       <button className="new" onClick={newSession} disabled={running}>＋ New session</button>
       <button className="ghost goal" onClick={() => patch({ showGoal: true })} disabled={running}>◎ Goal mode…</button>
       <div className="section">Sessions</div>

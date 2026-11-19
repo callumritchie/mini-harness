@@ -1,4 +1,4 @@
-"""Tools for mini-claude: the manual the model reads, the strict input rules, and the implementation of each.
+"""Tools for mini-harness: the manual the model reads, the strict input rules, and the implementation of each.
 
 Every error raised as ToolError must say what went wrong AND what to try next: the model only sees the message.
 """

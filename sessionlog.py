@@ -14,7 +14,12 @@ NOT_RUN = ("Not run: the session stopped (a crash or an exit) before this tool c
 
 
 def home():
-    return Path(os.environ.get("MINI_CLAUDE_HOME") or Path.home() / ".mini-claude")
+    """Where logs live. A project called mini-claude before it was renamed: if only the old folder exists, keep using it, so history is not lost."""
+    env = os.environ.get("MINI_HARNESS_HOME") or os.environ.get("MINI_CLAUDE_HOME")
+    if env:
+        return Path(env)
+    new, old = Path.home() / ".mini-harness", Path.home() / ".mini-claude"
+    return old if old.is_dir() and not new.exists() else new
 
 
 def project_dir(cwd):

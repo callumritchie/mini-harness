@@ -9,7 +9,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-os.environ["MINI_CLAUDE_HOME"] = tempfile.mkdtemp()
+os.environ["MINI_HARNESS_HOME"] = tempfile.mkdtemp()
 faulthandler.dump_traceback_later(120, exit=True)  # a hang is a failure, not a stuck test run
 
 from starlette.testclient import TestClient

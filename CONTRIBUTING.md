@@ -14,7 +14,7 @@ npm run build                    # builds ui/dist, which the server serves
 npm run e2e                      # real browser, real server, scripted demo model
 ```
 
-Working on the UI with hot reload: start the server with `MINI_CLAUDE_TOKEN=dev MINI_CLAUDE_DEV_ORIGINS=http://localhost:5173
+Working on the UI with hot reload: start the server with `MINI_HARNESS_TOKEN=dev MINI_HARNESS_DEV_ORIGINS=http://localhost:5173
 python3 agent.py --ui --demo --no-open`, then `npm run dev` in `ui/` and open `http://localhost:5173/?token=dev`.
 
 Ground rules:

@@ -1,4 +1,4 @@
-const KEY = "mini-claude-token";
+const KEY = "mini-harness-token";
 
 /** The token from the address the server printed (?token=...), remembered for this tab and removed from the address bar. */
 export function getToken(): string | null {

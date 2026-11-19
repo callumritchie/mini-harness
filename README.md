@@ -1,8 +1,8 @@
-# mini-claude
+# Mini Harness
 
-[![CI](https://github.com/callumritchie/mini-claude/actions/workflows/ci.yml/badge.svg)](https://github.com/callumritchie/mini-claude/actions/workflows/ci.yml)
+[![CI](https://github.com/callumritchie/mini-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/callumritchie/mini-harness/actions/workflows/ci.yml)
 
-A small coding agent in Python, in the spirit of Claude Code and Cursor. Use it in the terminal or in a local web UI; it works with
+A small coding agent in Python, in the spirit of Cursor and other AI coding tools. Use it in the terminal or in a local web UI; it works with
 Anthropic's API (Claude) and DeepSeek's Anthropic-compatible endpoint.
 
 <p align="center">
@@ -78,6 +78,11 @@ See `CONTRIBUTING.md`. `DESIGN.md` documents how everything works and every deci
 
 Tested live on Claude. **DeepSeek is untested** (no key to test with). MCP supports stdio servers and tools only. The web UI is single-user,
 one project per server, macOS/Linux first.
+
+## Upgrading from mini-claude
+
+The project was renamed. The command is now `mini-harness` (reinstall with `pip install -e .`). Your saved sessions are still found in
+`~/.mini-claude` until a `~/.mini-harness` folder exists, and the old `MINI_CLAUDE_*` environment variables still work.
 
 ## Licence
 
