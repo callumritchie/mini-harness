@@ -4,8 +4,8 @@ import { useStore, type Item } from "../store";
 type ToolItem = Extract<Item, { kind: "tool" }>;
 
 const ICON: Record<string, string> = {
-  read_file: "📄", write_file: "✏️", edit_file: "✏️", bash: "⌘", glob: "🔎", grep: "🔎", web_search: "🌐", code_execution: "⚙️",
-  ask_user: "❓", subagent: "🤖",
+  read_file: "▤", write_file: "✎", edit_file: "✎", bash: "$", glob: "⌕", grep: "⌕", web_search: "◍", code_execution: "▶",
+  ask_user: "?", subagent: "◇",
 };
 const LIMIT = 4000;
 
@@ -21,9 +21,9 @@ export function ToolCard({ item }: { item: ToolItem }) {
   return (
     <div className={`tool ${item.isError ? "error" : ""} ${item.status}`}>
       <button className="tool-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className="tool-icon">{ICON[item.name] ?? "🔧"}</span>
+        <span className="tool-icon">{ICON[item.name] ?? "•"}</span>
         <span className="tool-display">{item.display}</span>
-        <span className="tool-state">{item.status === "running" ? <span className="spinner" aria-label="running" /> : item.isError ? "failed" : "done"}</span>
+        <span className="tool-state">{item.status === "running" ? <span className="spinner" aria-label="running" /> : <><span className="status-dot" aria-hidden />{item.isError ? "failed" : "done"}</>}</span>
         <span className="chev">{open ? "▾" : "▸"}</span>
       </button>
       {editsFile && item.status === "done" && !item.isError && (

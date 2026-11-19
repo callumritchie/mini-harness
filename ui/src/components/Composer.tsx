@@ -21,6 +21,15 @@ export function Composer() {
   const connected = useStore((s) => s.connected);
   const submit = useStore((s) => s.submit);
   const cancel = useStore((s) => s.cancel);
+  const draft = useStore((s) => s.draft);
+  const patch = useStore((s) => s.patch);
+
+  useEffect(() => {
+    if (draft === null) return;
+    setText(draft);
+    patch({ draft: null });
+    ref.current?.focus();
+  }, [draft, patch]);
 
   const matches = useMemo(() => (text.startsWith("/") && !text.includes("\n") ? COMMANDS.filter((c) => c.cmd.startsWith(text.split(" ")[0]) && text.split(" ").length === 1) : []), [text]);
 
@@ -53,6 +62,7 @@ export function Composer() {
       <div className="box">
         <textarea
           ref={ref}
+          id="composer"
           value={text}
           rows={1}
           placeholder={connected ? (running ? "Working… press Stop to interrupt" : "Message Mini Harness, or / for commands") : "Connecting…"}
@@ -79,7 +89,7 @@ export function Composer() {
           <button className="send" onClick={send} disabled={!text.trim() || !connected} aria-label="Send">↑</button>
         )}
       </div>
-      <div className="foot">Enter to send · Shift+Enter for a new line · Esc to stop</div>
+      <div className="foot"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · <kbd>Esc</kbd> stop</div>
     </div>
   );
 }

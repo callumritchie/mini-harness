@@ -13,7 +13,6 @@ export function Message({ item }: { item: Item }) {
     case "assistant":
       return (
         <div className="msg assistant">
-          <div className="avatar" aria-hidden>✦</div>
           <div className="body">
             <Markdown text={item.text} />
             {item.streaming && <span className="cursor" aria-hidden />}

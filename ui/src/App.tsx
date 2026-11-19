@@ -24,6 +24,25 @@ export default function App() {
   const token = getToken();
 
   useEffect(() => {
+    // small screens start with both side panels closed (they open as drawers)
+    const { patch } = useStore.getState();
+    if (window.innerWidth < 760) patch({ sidebarOpen: false, rightOpen: false });
+    else if (window.innerWidth < 1100) patch({ rightOpen: false });
+    const keys = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        document.getElementById("composer")?.focus();
+      } else if (e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        patch({ sidebarOpen: !useStore.getState().sidebarOpen });
+      }
+    };
+    window.addEventListener("keydown", keys);
+    return () => window.removeEventListener("keydown", keys);
+  }, []);
+
+  useEffect(() => {
     if (!token) return;
     const { apply, patch, setSocket } = useStore.getState();
     let firstHello = true;

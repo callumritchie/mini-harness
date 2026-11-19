@@ -558,6 +558,13 @@ and works in a throwaway folder, so the interface can be tried, developed and te
 `SCREENSHOTS=1` refreshes `docs/screenshots`). Python: `tests/test_server.py` covers auth, streaming order, approvals (deny, allow, a
 non-boolean answer), `ask_user`, Stop, refresh catch-up, sessions, and the file endpoints (secrets, `..`, symlinks, `.git`, binary).
 
+**Look and feel (2026-11-19 redesign).** Neutral greys with one indigo accent (the accent text colour flips to dark in dark mode so contrast
+holds), no vendor branding. The top bar is one row that sheds detail with container queries as the chat column narrows (context numbers, then
+the model name, then the DEMO badge); model and effort live in a Settings popover, while the permission switch stays visible because it is the
+safety control. The empty chat offers starter prompts that only fill the message box. Code blocks have a Copy button. The side panel is
+resizable (width kept in localStorage). Below 1100px the side panel, and below 760px the session list too, become drawers. Shortcuts:
+Cmd/Ctrl+K focuses the message box, Cmd/Ctrl+B toggles the session list. Behaviour and protocol are unchanged.
+
 ## Tool patterns
 
 Rules every tool follows. A new tool must meet all of them.

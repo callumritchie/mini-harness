@@ -22,7 +22,12 @@ export function PermissionDialog() {
   return (
     <div className="overlay">
       <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="perm-title">
-        <h2 id="perm-title">Permission needed: {p.title}</h2>
+        <h2 id="perm-title">
+          <svg className="shield" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M12 3l8 3v6c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6l8-3z" /><path d="M12 8v5M12 16v.01" />
+          </svg>
+          Permission needed: {p.title}
+        </h2>
         <pre className="action">{p.display.join("\n")}</pre>
         {p.findings.length > 0 && (
           <ul className="findings">
@@ -38,6 +43,7 @@ export function PermissionDialog() {
         </ul>
         {p.note && <p className="note">{p.note}</p>}
         <div className="buttons">
+          <span className="keyhint"><kbd>Esc</kbd> denies</span>
           <button ref={deny} className="deny" onClick={() => answer(false)}>Deny</button>
           <button className="allow" onClick={() => answer(true)}>Allow</button>
         </div>

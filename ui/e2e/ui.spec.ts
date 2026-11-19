@@ -18,6 +18,14 @@ test("the whole demo walk-through", async ({ page }) => {
   expect(page.url()).not.toContain("token="); // the token is removed from the address bar
   await page.screenshot({ path: shot("01-empty") });
 
+  // a starter fills the message box without sending anything; the settings popover shows the model
+  await page.getByRole("button", { name: /Explore this project/ }).click();
+  await expect(page.getByPlaceholder(/Message Mini Harness/)).toHaveValue(/Look around this project/);
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("dialog", { name: "Settings" }).getByRole("combobox").first()).toHaveValue("claude-sonnet-5-5");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Settings" })).toBeHidden();
+
   // streaming chat, with markdown and a code block
   const box = page.getByPlaceholder(/Message Mini Harness/);
   await box.fill("hello");

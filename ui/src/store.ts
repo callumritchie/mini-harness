@@ -55,6 +55,7 @@ export interface ChatState {
   selectedChange: string | null;
   selectedFile: string | null;
   showGoal: boolean;
+  draft: string | null; // text a starter button wants put in the message box
 }
 
 let counter = 0;
@@ -78,6 +79,7 @@ export const initialState: ChatState = {
   selectedChange: null,
   selectedFile: null,
   showGoal: false,
+  draft: null,
 };
 
 /** One line describing a tool call, like the terminal's activity line. */
