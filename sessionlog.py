@@ -5,6 +5,7 @@ import datetime
 import json
 import os
 import sys
+import threading
 import uuid
 from pathlib import Path
 
@@ -80,6 +81,7 @@ class Log:
 
     def __init__(self, path):
         self.path, self.id, self.failed = Path(path), Path(path).stem, False
+        self.lock = threading.Lock()  # a log can be appended to from several threads (parallel subagents)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         fresh = not self.path.exists()
         self.f = open(self.path, "ab")
@@ -96,16 +98,17 @@ class Log:
         return cls(folder / f"{stamp}-{uuid.uuid4().hex[:8]}.jsonl")
 
     def append(self, event):
-        if self.failed:
-            return
         event = {"time": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds"), **event}
-        try:
-            self.f.write((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
-            self.f.flush()
-            os.fsync(self.f.fileno())
-        except OSError as e:  # a full disk must not kill the session
-            self.failed = True
-            print(f"Warning: could not write the session log ({e}). Carrying on without saving.", file=sys.stderr)
+        with self.lock:
+            if self.failed:
+                return
+            try:
+                self.f.write((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
+                self.f.flush()
+                os.fsync(self.f.fileno())
+            except OSError as e:  # a full disk must not kill the session
+                self.failed = True
+                print(f"Warning: could not write the session log ({e}). Carrying on without saving.", file=sys.stderr)
 
 
 def load(path):

@@ -1,4 +1,5 @@
 """One conversation, and the saved log behind it."""
+import threading
 from pathlib import Path
 
 import context
@@ -61,6 +62,7 @@ class Session:
         self.on_change = None  # called with (path, before, after) when write_file or edit_file changes a file
         self.last_cost = None
         self.unpriced_models = set()
+        self.lock = threading.RLock()  # subagents running side by side each add their cost here
         if restored:  # rebuilt from a log: keep the logged instructions byte for byte
             self.system, self.system_parts, self.messages = restored["system"], restored["system_parts"], restored["messages"]
             self.last_usage, self.totals, self.model = restored["last_usage"], restored["totals"], restored["model"] or model
@@ -174,9 +176,10 @@ class Session:
     def add_aux(self, label, model, usage, usd, **extra):
         """A call made on this session's behalf that is not part of the conversation (the judge, a subagent). It counts toward
         cost and tokens, not toward the turn limit, and is saved in the log."""
-        for k, v in usage.items():
-            self.totals[k] = self.totals.get(k, 0) + v
-        self._count_cost(model, usd)
+        with self.lock:
+            for k, v in usage.items():
+                self.totals[k] = self.totals.get(k, 0) + v
+            self._count_cost(model, usd)
         self.emit({"type": "aux", "label": label, "model": model, "usage": usage, "cost": {"usd": usd, "model": model}, **extra})
 
     def record(self, usage, model=None):

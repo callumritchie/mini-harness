@@ -114,7 +114,7 @@ DeepSeek is reached through its Anthropic-compatible endpoint (`https://api.deep
     skills and MCP servers in Claude Code's formats, a price list with a cost on every call, `--effort`, `--json`.
 20. **Not done yet:** server-side refusal fallbacks (we only report `refusal`), a `.gitignore` (the project is not a
     git repo yet), keeping the last few turns word for word across a compaction, MCP resources/prompts and non-stdio
-    servers, running subagents in parallel, DeepSeek-specific live testing (no key), multi-user or multi-project web serving, editing
+    servers, DeepSeek-specific live testing (no key), multi-user or multi-project web serving, editing
     files from the web UI, git status/diff in the Changes tab.
 
 ## The session log
@@ -420,6 +420,22 @@ time, and not for permission, for things it can look up, or to chat.
   unless an `--allow` rule covers them).
 - What it cost is added to the parent as an `aux` event, so `--max-cost` and the run's cost include it. If it cannot finish, the
   parent gets an error result ("the subagent did not finish: ...").
+
+**In parallel (2026-11-19).** Subagent calls that come one after another in a reply run at the same time, up to `PARALLEL_SUBAGENTS` = 4
+(`agent.run_parallel`); a lone call and every other tool still run one at a time, in order, and a different call between two subagent calls
+splits them into separate groups. What did not change: the model gets one message of results **in the order it asked**, and the log records them
+in that order too (resume rebuilds the message from log order, so logging as-completed would rebuild a different one than was sent and
+break the frozen-prefix rule). How it is kept safe:
+- **Checks and questions stay on one thread.** `prepare()` (allowed here? valid input? permission) runs for every call in order on the main
+  thread; only the approved runs go to the pool, so two permission prompts or judge calls can never overlap.
+- **Shared writes are locked.** A subagent adds its cost to the parent (`Session.add_aux`, behind a lock) and the parent's log can be
+  appended from several threads (`Log.append` holds a lock for write, flush and sync). Each subagent has its own session and log file.
+- **Stopping.** The Stop button sets the run's cancel event, which every subagent polls. A terminal Ctrl-C reaches only the main thread, so the
+  batch also has its own stop event; on any error or Ctrl-C it is set, every helper stops, the pool is **waited for**, and only then is the
+  problem raised, so the task rolls back with no helper still running behind it and every helper's cost recorded.
+- Activity lines are labelled `[1]`, `[2]`, ... so they can be told apart.
+- **Limit:** `--max-turns` and `--max-cost` are checked between rounds, so one batch can spend up to four helpers' worth past `--max-cost`
+  (each helper still stops at its own 30 calls). A provider may also rate-limit four simultaneous calls; that is an error result for that call.
 
 ## Goal mode
 

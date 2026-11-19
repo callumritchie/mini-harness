@@ -201,7 +201,7 @@ TOOLS += [
         "number'). Vague tasks give vague answers.\n"
         "Use it for research that would fill this conversation with reading (surveying many files, counting, checking a "
         "claim), and for a second opinion. Do not use it for work that changes anything. Several subagent calls in one "
-        "reply run one after another.",
+        "reply may run at the same time, so each must stand on its own.",
         {"task": _str("The complete task, with every path and fact the helper needs.", minLength=1)},
         ["task"],
     ),

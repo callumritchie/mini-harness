@@ -6,6 +6,8 @@ import dataclasses
 import json
 import os
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -40,6 +42,7 @@ KNOWN_WINDOWS = {"deepseek-flash": 1_000_000, "deepseek-v4-pro": 1_000_000}  # f
 MAX_STEPS = 50  # model calls in one task unless --max-turns says otherwise
 GOAL_STEPS = 100  # model calls in a whole goal unless --max-turns says otherwise
 SUBAGENT_STEPS = 30
+PARALLEL_SUBAGENTS = 4  # subagent calls from one reply that run at the same time
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 EXIT_OK, EXIT_ERROR, EXIT_NOT_FINISHED, EXIT_INTERRUPTED = 0, 1, 3, 130
 # Claude models that get the newer web search (dynamic filtering). Everything else gets the basic version.
@@ -158,8 +161,9 @@ def request_body(run):
     return {"extra_body": body}
 
 
-def execute(run, session, use):
-    """One tool call to its result. Always returns (text, is_error): refused, invalid, denied, failed or done."""
+def prepare(run, use):
+    """Everything that comes before a tool runs: is it allowed here, is the input valid, may it run (this is where the person is
+    asked). Returns (text, is_error) if the call is answered right here (refused, invalid, denied), or None: go ahead and run it."""
     if run.tool_names is not None and use.name not in run.tool_names:
         return (f"Refused: {use.name} is not available here. This helper is read-only and can only use {', '.join(run.tool_names)}. "
                 "Say in your answer that you cannot do it; do not look for another way.", True)
@@ -170,9 +174,59 @@ def execute(run, session, use):
     decision = run.permissions.decide(use.name, use.input)
     if not decision.allowed:
         return decision.message, True
-    if mcp_tool:
+    return None
+
+
+def execute(run, session, use):
+    """One tool call to its result. Always returns (text, is_error): refused, invalid, denied, failed or done."""
+    early = prepare(run, use)
+    if early is not None:
+        return early
+    if run.mcp is not None and run.mcp.owns(use.name):
         return run.mcp.call(use.name, use.input)
     return tools.run(use.name, use.input, session)
+
+
+class AnyEvent:
+    """Looks like a threading.Event that is set when any of the given events is (None is ignored)."""
+
+    def __init__(self, *events):
+        self.events = [e for e in events if e is not None]
+
+    def is_set(self):
+        return any(e.is_set() for e in self.events)
+
+
+_worker = threading.local()  # set on a pool thread: which parallel subagent it is running (tag) and what stops it (cancel)
+
+
+def run_parallel(run, session, uses, finish):
+    """Several subagent calls from one reply, run at the same time (at most PARALLEL_SUBAGENTS). Checking and asking permission
+    happen here, one call after another; only the runs are concurrent. `finish(use, text, is_error)` is called in the order of
+    `uses`, on this thread, so results are logged and sent in the order the model asked. If anything goes wrong or the run is
+    stopped, the others are told to stop and waited for before the problem is raised, so nothing keeps running behind a rolled-back task."""
+    batch = threading.Event()
+    cancel = AnyEvent(run.cancel, batch)
+
+    def work(tag, use):
+        _worker.tag, _worker.cancel = tag, cancel
+        return tools.run(use.name, use.input, session)
+
+    pool = ThreadPoolExecutor(max_workers=PARALLEL_SUBAGENTS)
+    try:
+        answers = []  # per call: a ready (text, is_error), or a future
+        for n, use in enumerate(uses, 1):
+            check_cancel(run)
+            early = prepare(run, use)
+            answers.append(early if early is not None else pool.submit(work, n, use))
+        for use, answer in zip(uses, answers):
+            text, is_error = answer if isinstance(answer, tuple) else answer.result()
+            finish(use, text, is_error)
+    except BaseException:
+        batch.set()
+        raise
+    finally:
+        pool.shutdown(wait=True)
 
 
 def check_cancel(run):
@@ -188,6 +242,18 @@ def _server_tool_summary(block):
         titles = [t for t in titles if t]
         return f"{len(content)} result(s)" + (": " + "; ".join(titles[:5]) if titles else "")
     return "the search returned an error" if content is not None else "no result"
+
+
+def tool_groups(uses, may_run):
+    """Split a reply's tool calls into groups, in order: every run of consecutive `subagent` calls (if the calls may run at all)
+    is one group, and every other call is a group of one. Everything inside a group of one runs alone; a group of several runs together."""
+    groups = []
+    for use in uses:
+        if may_run and use.name == "subagent" and groups and groups[-1][0].name == "subagent":
+            groups[-1].append(use)
+        else:
+            groups.append([use])
+    return groups
 
 
 def agent_loop(run, session):
@@ -236,20 +302,34 @@ def agent_loop(run, session):
             return reply
 
         results = []
-        for use in tool_uses:
-            check_cancel(run)
+
+        def announce(use):
             run.on_tool(use.name, use.input)
             if run.on_call:
                 run.on_call(use.id, use.name, use.input)
-            if reply.stop_reason == "max_tokens":  # the tool input may be cut off, so do not run it
-                out, is_error = "Your reply hit the token limit, so this call was not run. Try a smaller step.", True
-            else:
-                out, is_error = execute(run, session, use)
+
+        def finish(use, out, is_error):
             result = {"type": "tool_result", "tool_use_id": use.id, "content": out, "is_error": is_error}
             session.log_tool_result(result)  # saved now, not after the whole batch
             if run.on_result:
                 run.on_result(use.id, use.name, out, is_error)
             results.append(result)
+
+        for group in tool_groups(tool_uses, reply.stop_reason != "max_tokens"):
+            if len(group) > 1:  # several subagent calls in a row: run them side by side, answer in order
+                check_cancel(run)
+                for use in group:
+                    announce(use)
+                run_parallel(run, session, group, finish)
+                continue
+            use = group[0]
+            check_cancel(run)
+            announce(use)
+            if reply.stop_reason == "max_tokens":  # the tool input may be cut off, so do not run it
+                out, is_error = "Your reply hit the token limit, so this call was not run. Try a smaller step.", True
+            else:
+                out, is_error = execute(run, session, use)
+            finish(use, out, is_error)
         session.add_tool_results(results)
     raise NotFinished(f"Stopped after {MAX_STEPS} model calls in one task without finishing.")
 
@@ -272,7 +352,7 @@ def run_task(run, session, task, human=_UNSET):
     session.add_user(content, human=task if human is _UNSET else human)
     session.cancel, session.on_change = run.cancel, run.on_change
     if run.tool_names is None:
-        session.run_subagent = lambda subtask: run_subagent(run, session, subtask)
+        session.run_subagent = lambda subtask: run_subagent(run, session, subtask, tag=getattr(_worker, "tag", None), cancel=getattr(_worker, "cancel", None))
     try:
         return agent_loop(run, session)
     except BaseException:
@@ -286,16 +366,19 @@ def final_text(reply):
 
 # ---------- subagents ----------
 
-def run_subagent(run, parent, task, kind="subagent", steps=SUBAGENT_STEPS):
+def run_subagent(run, parent, task, kind="subagent", steps=SUBAGENT_STEPS, tag=None, cancel=None):
     """The same loop in a fresh, empty conversation with read-only tools and its own log. Returns only the final answer.
-    Failures come back as a ToolError, so the caller sees them as an error result."""
+    Failures come back as a ToolError, so the caller sees them as an error result. When several run at once, `tag` labels their
+    activity lines ([2] ...) and `cancel` is the batch's stop event, so one failure can stop the others."""
+    pre = f"[{tag}] " if tag else ""
     sub = Session.start(run.model, kind=kind, parent=parent.id)
     perms = Permissions(False, mode="allow" if run.permissions.mode == "allow" else "ask", rules=run.permissions.rules,
-                        say=lambda m: run.say(f"    {m.strip()}"))
+                        say=lambda m: run.say(f"    {pre}{m.strip()}"))
     sub_run = dataclasses.replace(
         run, permissions=perms, tool_names=list(tools.SUBAGENT_TOOLS), web_search=False, mcp=None, compactor=None,
         limits=Limits(sub, max_turns=steps), on_text=lambda t: None, on_usage=None,
-        on_tool=lambda name, args: run.say(f"  ↳ {tools.describe_call(name, args)}"),
+        on_tool=lambda name, args: run.say(f"  {pre}↳ {tools.describe_call(name, args)}"),
+        cancel=cancel if cancel is not None else run.cancel,
     )
     try:
         text = final_text(run_task(sub_run, sub, task))
@@ -306,7 +389,7 @@ def run_subagent(run, parent, task, kind="subagent", steps=SUBAGENT_STEPS):
     finally:
         usage = {k: sub.totals[k] for k in ("input", "cache_read", "cache_write", "output", "searches")}
         parent.add_aux(kind, run.model, usage, sub.totals["cost_usd"] if not sub.totals["unpriced_calls"] else None, log=sub.id)
-        run.say(f"  ↳ {kind} finished: {sub.totals['calls']} model calls, {pricing.money(sub.totals['cost_usd']) if not sub.totals['unpriced_calls'] else 'cost unknown'}")
+        run.say(f"  {pre}↳ {kind} finished: {sub.totals['calls']} model calls, {pricing.money(sub.totals['cost_usd']) if not sub.totals['unpriced_calls'] else 'cost unknown'}")
     return text or "(the subagent gave no answer)"
 
 

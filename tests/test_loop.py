@@ -344,6 +344,100 @@ try:
 except tools.ToolError as e:
     assert "did not finish" in str(e) and "turn limit" in str(e)
 
+# ---------- subagents in parallel: side by side, answered in order, all costs counted, a stop stops them all ----------
+import threading as _th
+
+
+class ParFake:
+    """A client for the parallel tests: the parent (the call that is offered the subagent tool) follows a script; every subagent answers
+    from its task text. A call counts as running from when it starts until it answers; `gate` makes them all wait for each other."""
+    def __init__(self, parent_replies, gate=None, slow=(), hold=0.0, hook=None):
+        self.parent, self.gate, self.slow, self.hold, self.hook = list(parent_replies), gate, set(slow), hold, hook
+        self.lock, self.running, self.peak = _th.Lock(), 0, 0
+        self.messages = NS(stream=self._stream)
+        self.beta = NS(messages=self.messages)
+    def with_options(self, **kw): return self
+    def _stream(self, **kw):
+        if "subagent" in [t["name"] for t in kw["tools"]]:
+            with self.lock: r = self.parent.pop(0)
+            return Ctx(with_usage(r))
+        task = kw["messages"][0]["content"]
+        with self.lock: self.running += 1; self.peak = max(self.peak, self.running)
+        try:
+            if self.gate: self.gate.wait()  # raises BrokenBarrierError (after the timeout) if they are not running side by side
+            if task in self.slow: time.sleep(0.3)
+            if self.hold: time.sleep(self.hold)
+            if self.hook: self.hook(task)
+        finally:
+            with self.lock: self.running -= 1
+        if task == "fail":  # never finishes: calls a tool forever, so the subagent hits its turn limit
+            return Ctx(with_usage(reply(use("g", "glob", pattern="*", path=str(tmp)))))
+        return Ctx(with_usage(reply(text(f"done {task}"), stop="end_turn")))
+
+
+def one_cost(): return pricing.cost("claude-opus-5-5", {"input": 10, "cache_read": 0, "cache_write": 0, "output": 10, "searches": 0})
+def sub_log_count(): return len(list((sessionlog.project_dir(Path.cwd()) / "subagents").glob("*.jsonl"))) if (sessionlog.project_dir(Path.cwd()) / "subagents").exists() else 0
+def asked(*tasks): return reply(*[use(f"p{i}", "subagent", task=t) for i, t in enumerate(tasks, 1)])
+said = []
+
+# three at once, and the first one finishes last: the answers still come back in the order they were asked, and all three ran together
+parent, before = Session.start("claude-opus-5-5"), sub_log_count()
+fk = ParFake([asked("A", "B", "C"), final], gate=_th.Barrier(3, timeout=5), slow=["A"])
+agent.run_task(mkrun(fk, say=said.append), parent, "go")
+got = parent.messages[2]["content"]
+assert [r["tool_use_id"] for r in got] == ["p1", "p2", "p3"] and [r["content"] for r in got] == ["done A", "done B", "done C"] and not any(r["is_error"] for r in got)
+assert fk.peak == 3 and sub_log_count() - before == 3  # side by side, one log each
+log = [json.loads(l) for l in parent.log.path.read_text().splitlines()]  # every line is whole, and the results were logged in the order asked
+assert [e["tool_use_id"] for e in log if e["type"] == "tool_result"] == ["p1", "p2", "p3"] and len([e for e in log if e["type"] == "aux"]) == 3
+assert parent.totals["calls"] == 2 and abs(parent.totals["cost_usd"] - 5 * one_cost()) < 1e-12  # the parent's own two calls plus the three helpers'
+assert {m.split("↳")[0].strip() for m in said if "↳" in m} >= {"[1]", "[2]", "[3]"} and all("finished" in m for m in said if "finished" in m)  # labelled lines
+rebuilt = sessionlog.replay(sessionlog.load(parent.log.path)[0])["messages"]
+assert [r["tool_use_id"] for r in rebuilt[2]["content"]] == ["p1", "p2", "p3"]  # resuming rebuilds the same message
+
+# never more than the cap at once
+fk = ParFake([asked(*"ABCDEF"), final], hold=0.1)
+agent.run_task(mkrun(fk), Session.start("claude-opus-5-5"), "go")
+assert 2 <= fk.peak <= agent.PARALLEL_SUBAGENTS
+
+# a call between two subagents splits them: nothing runs across it, and the order holds
+(tmp / "a.txt").write_text("hello\n")
+fk = ParFake([reply(use("p1", "subagent", task="A"), use("p2", "read_file", path=str(tmp / "a.txt")), use("p3", "subagent", task="B")), final], hold=0.05)
+s3 = Session.start("claude-opus-5-5"); agent.run_task(mkrun(fk), s3, "go")
+got = s3.messages[2]["content"]
+assert [r["tool_use_id"] for r in got] == ["p1", "p2", "p3"] and "hello" in got[1]["content"] and fk.peak == 1
+
+# one helper that cannot finish is one error result; the others are fine
+fk = ParFake([asked("fail", "B"), final])
+s4 = Session.start("claude-opus-5-5"); agent.run_task(mkrun(fk), s4, "go")
+got = s4.messages[2]["content"]
+assert [r["is_error"] for r in got] == [True, False] and "did not finish" in got[0]["content"] and got[1]["content"] == "done B"
+
+# Stop (the run's cancel event) mid-batch: the task is dropped, no thread is left running, every helper still recorded itself
+stop = _th.Event(); threads0 = _th.active_count()
+fk = ParFake([asked("A", "B", "C"), final], gate=_th.Barrier(3, timeout=5), hook=lambda task: stop.set() if task == "B" else None, hold=0.05)
+s5 = Session.start("claude-opus-5-5"); before = sub_log_count()
+try:
+    agent.run_task(mkrun(fk, cancel=stop), s5, "go"); raise AssertionError("expected Interrupted")
+except tools.Interrupted:
+    pass
+assert s5.messages == [] and _th.active_count() == threads0 and len([l for l in s5.log.path.read_text().splitlines() if '"aux"' in l]) == 3
+# a helper that dies takes its siblings down with it (a terminal Ctrl-C reaches only the main thread, so there is no run-wide event here)
+def boom(task):
+    if task == "B": raise tools.Interrupted()
+fk = ParFake([asked("A", "B", "C"), final], gate=_th.Barrier(3, timeout=5), hook=boom, slow=["A", "C"])
+s6 = Session.start("claude-opus-5-5")
+try:
+    agent.run_task(mkrun(fk), s6, "go"); raise AssertionError("expected Interrupted")
+except tools.Interrupted:
+    pass
+assert s6.messages == [] and _th.active_count() == threads0
+
+# the log can be written from several threads at once without tearing a line
+hammer = sessionlog.Log(Path(tempfile.mkdtemp()) / "x.jsonl")
+ts = [_th.Thread(target=lambda n=n: [hammer.append({"type": "t", "n": n, "i": i, "pad": "x" * 500}) for i in range(50)]) for n in range(8)]
+[t_.start() for t_ in ts]; [t_.join() for t_ in ts]
+assert len([json.loads(l) for l in hammer.path.read_text().splitlines()]) == 400
+
 # ---------- goal mode ----------
 assert goal.parse_claim("blah\nDONE: wrote add.py and ran the tests, all pass") == ("done", "wrote add.py and ran the tests, all pass")
 assert goal.parse_claim("**BLOCKED:** no network")[0] == "blocked" and goal.parse_claim("I am not done")[0] is None

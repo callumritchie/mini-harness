@@ -13,7 +13,7 @@ Anthropic's API (Claude) and DeepSeek's Anthropic-compatible endpoint.
 ## What it does
 
 - **Tools:** read, write and edit files (edits replace exact text, in a file it has read), run commands, search the project, web search
-  (the provider's), ask you a question, and run read-only subagents.
+  (the provider's), ask you a question, and run read-only subagents (several at once).
 - **Safety first:** harmless things run; anything risky is shown *exactly* and asked yes/no, with hidden characters made visible. Headless it
   denies and tells you how to pre-approve (`--allow "pytest"`). An optional AI judge can take the easy questions (it never sees file
   contents or tool output, and secrets always come to you). Searching is free inside the project and never shows secret files.
