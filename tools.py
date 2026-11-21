@@ -635,3 +635,39 @@ def describe_call(name, args):
     if not detail and args:  # e.g. an MCP tool: show its arguments
         detail = json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)
     return f"{name}({safety.visible(detail, limit=200)})"
+
+
+def outcome(name, args, text, is_error):
+    """A few words on how a call went, for the row that shows it ("612 lines", "3 matches", "exit 1"). Read from the results this
+    module itself writes, so the wording stays in one place. None when there is nothing short and honest to say."""
+    text = text or ""
+    if name == "bash":
+        m = re.match(r"exit code: (\d+)", text) or re.match(r"Command exited with code (-?\d+)", text)
+        if m:
+            return f"exit {m.group(1)}"
+        return "timed out" if "timed out" in text[:200] else None
+    if is_error:
+        return None
+    if name == "read_file":
+        m = re.search(r"\[showing lines (\d+)-(\d+) of (\d+);", text)
+        if m:
+            return f"lines {m.group(1)}–{m.group(2)} of {int(m.group(3)):,}"
+        if text == "(file is empty)":
+            return "empty"
+        n = sum(1 for line in text.split("\n") if re.match(r"\s*\d+\t", line))
+        return f"{n:,} line{'' if n == 1 else 's'}"
+    if name == "write_file":
+        return "new file" if text.startswith("Created") else "rewritten" if text.startswith("Overwrote") else None
+    if name in ("glob", "grep"):
+        if text.startswith("No "):
+            return "no matches"
+        n = sum(1 for line in text.split("\n") if line and not line.startswith("["))
+        unit = "file" if name == "glob" else "match"
+        return f"{n:,} {unit}{'' if n == 1 else ('s' if unit == 'file' else 'es')}"
+    if name == "ask_user":
+        m = re.match(r"The user answered: (.*)", text, re.S)
+        if m:
+            answer = " ".join(m.group(1).split())
+            return f"answered: {answer[:40]}{'…' if len(answer) > 40 else ''}"
+        return "no answer"
+    return None

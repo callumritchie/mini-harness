@@ -84,37 +84,44 @@ def run_check(command, cwd=None):
     return r.returncode == 0, r.returncode, out[-OUTPUT_TAIL:]
 
 
-def run(goal, verify, work, review, say, check=run_check, cwd=None):
+def run(goal, verify, work, review, say, check=run_check, cwd=None, event=None):
     """work(prompt, first) -> the worker's final text (raises NotFinished at a limit); review(claim) -> (done, text);
-    check(command) -> (passed, code, output). Returns a GoalResult; never raises NotFinished."""
+    check(command) -> (passed, code, output). Returns a GoalResult; never raises NotFinished. Progress goes to `event(kind, data,
+    text)` when given (the web UI shows it as structured steps), otherwise to `say(text)`; the text is the same either way."""
+    def tell(kind, data, text):
+        if event is not None:
+            event(kind, data, text)
+        else:
+            say(text)
+
     prompt = START.format(goal=goal, check=f"When you finish, the user's check `{verify}` will be run, and it must pass." if verify else "")
     rounds = 0
     try:
         while True:
-            say(f"goal round {rounds + 1}: working...")
+            tell("goal_round", {"n": rounds + 1}, f"goal round {rounds + 1}: working...")
             text = work(prompt, rounds == 0)
             rounds += 1  # counted once the model has actually worked, not when a limit stopped it first
             kind, body = parse_claim(text)
             if kind is None:
-                say("  no claim of done; asking it to continue")
+                tell("goal_status", {"status": "no_claim"}, "  no claim of done; asking it to continue")
                 prompt = NUDGE
                 continue
             if kind == "blocked":
                 return GoalResult(False, f"blocked: {body or 'no reason given'}", rounds, text)
             if len(body) < MIN_EVIDENCE:
-                say("  claimed done without evidence; sending it back")
+                tell("goal_status", {"status": "no_evidence"}, "  claimed done without evidence; sending it back")
                 prompt = NEED_EVIDENCE
                 continue
-            say("  claims it is done")
+            tell("goal_status", {"status": "claimed"}, "  claims it is done")
             if verify:
                 passed, code, output = check(verify)
-                say(f"  check `{verify}`: {'passed' if passed else f'FAILED (exit {code})'}")
+                tell("check_result", {"cmd": verify, "passed": passed, "exit_code": code}, f"  check `{verify}`: {'passed' if passed else f'FAILED (exit {code})'}")
                 if not passed:
                     prompt = CHECK_FAILED.format(verify=verify, code=code, output=output or "(no output)")
                     continue
-            say("  reviewer (fresh, read-only, trusts nothing) is checking...")
+            tell("goal_status", {"status": "reviewing"}, "  reviewer (fresh, read-only, trusts nothing) is checking...")
             verdict, review_text = review(body)
-            say(f"  reviewer verdict: {'DONE' if verdict else 'NOT DONE' if verdict is False else 'unclear'}")
+            tell("reviewer_verdict", {"verdict": verdict}, f"  reviewer verdict: {'DONE' if verdict else 'NOT DONE' if verdict is False else 'unclear'}")
             if verdict:
                 return GoalResult(True, review_text.strip(), rounds, text)
             prompt = REVIEW_FAILED.format(review=review_text.strip() or "(the reviewer gave no clear verdict)")

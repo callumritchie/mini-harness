@@ -33,6 +33,12 @@ class UI:
     def status(self, running): pass
     def ask_permission(self, assessment, note): return False  # the yes/no question; must return True only for an explicit yes
     def ask_user(self, question, choices): return None  # the ask_user tool; None means nobody can answer
+    def parallel(self, call_ids): pass  # these tool calls (from one reply) are about to run at the same time
+
+    def event(self, kind, data, text):
+        """Structured progress (goal rounds, checks, subagent steps). A front end that does not know them shows the text as a notice."""
+        if text:
+            self.notice(text)
 
 
 @dataclass
@@ -100,7 +106,7 @@ class Controller:
             on_text=self.ui.text, on_tool=lambda name, args: None,
             on_call=lambda cid, name, args: self.ui.tool_call(cid, name, args, tools.describe_call(name, args)),
             on_result=self.ui.tool_result, on_change=self.ui.change, cancel=self.cancel, say=self.ui.notice,
-            on_usage=lambda u, usd: self.ui.usage(u, usd, s.cost_summary()),
+            on_usage=lambda u, usd: self.ui.usage(u, usd, s.cost_summary()), event=self.ui.event, on_parallel=self.ui.parallel,
             limits=Limits(s, max_turns=self.args.max_turns or agent.MAX_STEPS, max_cost=self.args.max_cost),
         )
         settings.update(overrides)
@@ -139,7 +145,7 @@ class Controller:
         def go():
             limits = Limits(self.session, max_turns=max_turns or self.args.max_turns or agent.GOAL_STEPS, max_cost=self.args.max_cost)
             run = self.make_run(limits=limits)
-            ok, out, _ = agent.do_goal(run, self.session, text, verify, say=self.ui.notice)
+            ok, out, _ = agent.do_goal(run, self.session, text, verify, say=self.ui.notice, event=self.ui.event, max_turns=limits.max_turns)
             return TaskResult(text=out, stopped=None if ok else out)
         return self._guard(go)
 

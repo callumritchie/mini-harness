@@ -32,6 +32,7 @@ def discard_pending_input():
 class Decision:
     allowed: bool
     message: str = ""  # what the model is told when it is denied
+    by: str = ""  # who decided a risky call: "rule", "judge" or "user" ("" when nothing was asked, or nobody could answer)
 
 
 def terminal_ask(a, note):
@@ -63,6 +64,7 @@ class Permissions:
         self.say = say or (lambda msg: print(msg, file=sys.stderr))
         self.client = self.model = self.session = None
         self.judge_calls = 0
+        self.approvals = {}  # call id -> {"by": "rule"|"judge"|"user", "allowed": bool}, for front ends that show who decided
         self.ask = ask or terminal_ask  # how a question reaches the human: a terminal by default, a browser dialog in the web UI
 
     @property
@@ -75,25 +77,32 @@ class Permissions:
 
     # --- the decision ---
 
-    def decide(self, name, args):
+    def decide(self, name, args, call_id=None):
         a = self.policy.assess(name, args)
+        a.call_id = call_id  # so the question can say which tool call it is about
         if not a.risky or self.mode == "allow":
             return Decision(True)
+        decision = self._decide(a)
+        if call_id is not None and decision.by:
+            self.approvals[call_id] = {"by": decision.by, "allowed": decision.allowed}
+        return decision
+
+    def _decide(self, a):
         rule = self.policy.matching_rule(a)
         if rule:
             self.say(f"  allowed by --allow {shlex.quote(rule.text)}: {a.title}")
-            return Decision(True)
+            return Decision(True, by="rule")
         note = None
         if self.mode == "judge":
             if all(code in judge.ELIGIBLE for code, _ in a.reasons):
                 verdict = self._judge(a)
                 self.say(f"  judge: {verdict.decision} - {verdict.reason}")
                 if verdict.decision == "allow":
-                    return Decision(True)
+                    return Decision(True, by="judge")
                 if verdict.decision == "deny":
-                    return Decision(False, f"Not run: the permission judge denied this ({verdict.reason}). Do not look for another way to do the same thing: tell the user what you wanted to do and why.")
+                    return Decision(False, f"Not run: the permission judge denied this ({verdict.reason}). Do not look for another way to do the same thing: tell the user what you wanted to do and why.", by="judge")
                 if verdict.decision == "error":  # an error means deny
-                    return Decision(False, f"Not run: the permission judge could not decide ({verdict.reason}), and an error counts as a refusal. Tell the user, or try a different approach.")
+                    return Decision(False, f"Not run: the permission judge could not decide ({verdict.reason}), and an error counts as a refusal. Tell the user, or try a different approach.", by="judge")
                 note = f"the judge was unsure: {verdict.reason}"
             else:
                 why = next(text for code, text in a.reasons if code not in judge.ELIGIBLE)
@@ -111,8 +120,8 @@ class Permissions:
 
     def _ask_human(self, a, note):
         if self.ask(a, note):
-            return Decision(True)
-        return Decision(False, "The user declined this. Do not repeat it or look for another way to do the same thing: ask the user what they would prefer.")
+            return Decision(True, by="user")
+        return Decision(False, "The user declined this. Do not repeat it or look for another way to do the same thing: ask the user what they would prefer.", by="user")
 
     def _deny_headless(self, a, note):
         """Nobody can answer: refuse, say why, and say exactly how to pre-approve."""

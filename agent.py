@@ -173,6 +173,16 @@ class Run:
     on_result: Optional[Callable] = None  # (id, name, text, is_error) when it finished
     on_change: Optional[Callable] = None  # (path, before, after) when write_file or edit_file changed a file
     cancel: Optional[object] = None  # a threading.Event: when set (the Stop button) the task stops like Ctrl-C
+    event: Optional[Callable] = None  # (kind, data, text): a structured progress event; without it the text is said as a notice
+    on_parallel: Optional[Callable] = None  # (ids) before several calls from one reply start together
+
+
+def notify(run, kind, data, text):
+    """Report progress. A front end that understands `kind` gets the data; every other one gets the same line of text as before."""
+    if run.event is not None:
+        run.event(kind, data, text)
+    else:
+        run.say(text)
 
 
 def request_body(run):
@@ -196,7 +206,7 @@ def prepare(run, use):
     problem = run.mcp.check(use.name, use.input) if mcp_tool else tools.check_input(use.name, use.input)
     if problem is not None:
         return problem, True
-    decision = run.permissions.decide(use.name, use.input)
+    decision = run.permissions.decide(use.name, use.input, call_id=use.id)
     if not decision.allowed:
         return decision.message, True
     return None
@@ -234,7 +244,7 @@ def run_parallel(run, session, uses, finish):
     cancel = AnyEvent(run.cancel, batch)
 
     def work(tag, use):
-        _worker.tag, _worker.cancel, _worker.share = tag, cancel, len(uses)
+        _worker.tag, _worker.cancel, _worker.share, _worker.call_id = tag, cancel, len(uses), use.id
         return tools.run(use.name, use.input, session)
 
     pool = ThreadPoolExecutor(max_workers=PARALLEL_SUBAGENTS)
@@ -357,6 +367,8 @@ def agent_loop(run, session):
         for group in tool_groups(tool_uses, reply.stop_reason != "max_tokens"):
             if len(group) > 1:  # several subagent calls in a row: run them side by side, answer in order
                 check_cancel(run)
+                if run.on_parallel:
+                    run.on_parallel([use.id for use in group])
                 for use in group:
                     announce(use)
                 run_parallel(run, session, group, finish)
@@ -367,7 +379,11 @@ def agent_loop(run, session):
             if reply.stop_reason == "max_tokens":  # the tool input may be cut off, so do not run it
                 out, is_error = "Your reply hit the token limit, so this call was not run. Try a smaller step.", True
             else:
-                out, is_error = execute(run, session, use)
+                _worker.call_id = use.id  # a subagent started by this call reports its steps against it
+                try:
+                    out, is_error = execute(run, session, use)
+                finally:
+                    _worker.call_id = None
             finish(use, out, is_error)
         session.add_tool_results(results)
     raise NotFinished(f"Stopped after {MAX_STEPS} model calls in one task without finishing.")
@@ -399,7 +415,8 @@ def run_task(run, session, task, human=_UNSET):
     session.add_user(content, human=task if human is _UNSET else human)
     session.cancel, session.on_change = run.cancel, run.on_change
     if run.tool_names is None:
-        session.run_subagent = lambda subtask: run_subagent(run, session, subtask, tag=getattr(_worker, "tag", None), cancel=getattr(_worker, "cancel", None), share=getattr(_worker, "share", 1))
+        session.run_subagent = lambda subtask: run_subagent(run, session, subtask, tag=getattr(_worker, "tag", None), cancel=getattr(_worker, "cancel", None),
+                                                            share=getattr(_worker, "share", 1), parent_id=getattr(_worker, "call_id", None))
     try:
         return agent_loop(run, session)
     except BaseException as e:
@@ -416,11 +433,19 @@ def final_text(reply):
 
 # ---------- subagents ----------
 
-def run_subagent(run, parent, task, kind="subagent", steps=SUBAGENT_STEPS, tag=None, cancel=None, share=1):
+def run_subagent(run, parent, task, kind="subagent", steps=SUBAGENT_STEPS, tag=None, cancel=None, share=1, parent_id=None):
     """The same loop in a fresh, empty conversation with read-only tools and its own log. Returns only the final answer.
     Failures come back as a ToolError, so the caller sees them as an error result. When several run at once, `tag` labels their
     activity lines ([2] ...) and `cancel` is the batch's stop event, so one failure can stop the others."""
     pre = f"[{tag}] " if tag else ""
+
+    def step(name, args):
+        line = f"  {pre}↳ {tools.describe_call(name, args)}"
+        if parent_id is None:
+            run.say(line)
+        else:
+            notify(run, "subagent_step", {"parent_id": parent_id, "index": tag, "display": tools.describe_call(name, args)}, line)
+
     budget = None
     if run.limits and run.limits.max_cost:  # helpers running side by side split what is left, so together they cannot pass the cap
         budget = max((run.limits.max_cost - run.limits.spent(parent)) / (share or 1), 1e-9)
@@ -430,7 +455,7 @@ def run_subagent(run, parent, task, kind="subagent", steps=SUBAGENT_STEPS, tag=N
     sub_run = dataclasses.replace(
         run, permissions=perms, tool_names=list(tools.SUBAGENT_TOOLS), web_search=False, mcp=None, compactor=None,
         limits=Limits(sub, max_turns=steps, max_cost=budget), on_text=lambda t: None, on_usage=None,
-        on_tool=lambda name, args: run.say(f"  {pre}↳ {tools.describe_call(name, args)}"),
+        on_tool=lambda name, args: step(name, args),
         cancel=cancel if cancel is not None else run.cancel,
     )
     try:
@@ -442,7 +467,12 @@ def run_subagent(run, parent, task, kind="subagent", steps=SUBAGENT_STEPS, tag=N
     finally:
         usage = {k: sub.totals[k] for k in ("input", "cache_read", "cache_write", "output", "searches")}
         parent.add_aux(kind, run.model, usage, sub.totals["cost_usd"] if not sub.totals["unpriced_calls"] else None, log=sub.id)
-        run.say(f"  {pre}↳ {kind} finished: {sub.totals['calls']} model calls, {pricing.money(sub.totals['cost_usd']) if not sub.totals['unpriced_calls'] else 'cost unknown'}")
+        cost = sub.totals["cost_usd"] if not sub.totals["unpriced_calls"] else None
+        line = f"  {pre}↳ {kind} finished: {sub.totals['calls']} model calls, {pricing.money(cost) if cost is not None else 'cost unknown'}"
+        if parent_id is None:
+            run.say(line)
+        else:
+            notify(run, "subagent_finish", {"parent_id": parent_id, "index": tag, "calls": sub.totals["calls"], "cost": cost}, line)
     return text or "(the subagent gave no answer)"
 
 
@@ -620,17 +650,20 @@ def headless(args):
     return EXIT_OK if ok else EXIT_NOT_FINISHED
 
 
-def do_goal(run, session, goal_text, verify, say):
-    """Goal mode on a session. Returns (done, text for the user, GoalResult)."""
+def do_goal(run, session, goal_text, verify, say, event=None, max_turns=None):
+    """Goal mode on a session. Returns (done, text for the user, GoalResult). With `event`, progress is reported as structured
+    events (the web UI); otherwise as the same lines of text as always."""
     saved_ask, session.ask_human = session.ask_human, (lambda question, choices: None)  # unattended: nobody can answer
-    if verify:
+    if event is not None:
+        event("goal_start", {"text": goal_text, "verify": verify, "max_turns": max_turns}, f"goal: {goal_text}\n  check: {verify}" if verify else "")
+    elif verify:
         say(f"goal: {goal_text}\n  check: {verify}")
     try:
         result = goalmode.run(
             goal_text, verify,
             work=lambda prompt, first: final_text(run_task(run, session, prompt, human=goal_text if first else None)),
             review=lambda claim: review_work(run, session, goal_text, verify, claim),
-            say=say,
+            say=say, event=event,
         )
     finally:
         session.ask_human = saved_ask

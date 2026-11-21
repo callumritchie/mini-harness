@@ -9,8 +9,9 @@ import { Spinner } from "./Spinner";
 const LIMIT = 4000;
 const MCP_MARK = "[output from MCP server";
 
-/** The tool call the open approval is about: until the server sends tool ids, the latest one still running. */
-function waitingId(items: Item[]): string | null {
+/** The tool call the open approval is about: the server names it; an older server leaves us the latest call still running. */
+function waitingId(items: Item[], toolId: string | null | undefined): string | null {
+  if (toolId) return toolId;
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
     if (it.kind === "tool" && it.status === "running") return it.id;
@@ -24,7 +25,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
   const [showInput, setShowInput] = useState(false);
   const [copied, setCopied] = useState(false);
   const patch = useStore((s) => s.patch);
-  const waiting = useStore((s) => (s.permission ? waitingId(s.items) : null)) === item.id;
+  const waiting = useStore((s) => (s.permission ? waitingId(s.items, s.permission.toolId) : null)) === item.id;
   const path = typeof item.input.path === "string" ? item.input.path : null;
   const editsFile = (item.name === "write_file" || item.name === "edit_file") && path;
   const change = useStore((s) => (editsFile && path ? s.changes[path] : undefined));
@@ -32,7 +33,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
   const stats = rows ? diffStats(rows) : null;
   const result = item.result ?? "";
   const shown = more || result.length <= LIMIT ? result : result.slice(0, LIMIT);
-  const mcp = result.startsWith(MCP_MARK);
+  const mcp = item.mcp || result.startsWith(MCP_MARK);
   const command = item.name === "bash" && typeof item.input.command === "string" ? item.input.command : null;
   // the result text is written for the model; the row's summary is written for the person
   const nextStep = item.isError && !item.denied ? result.split("\n").find((l) => l.trim()) ?? "" : "";
@@ -45,11 +46,21 @@ export function ToolCard({ item }: { item: ToolItem }) {
   };
 
   let outcome: React.ReactNode = null;
-  if (item.denied) outcome = <span className="chip bad">{item.denied === "judge" ? "judge denied" : "you denied"}</span>;
+  if (item.denied) outcome = <span className="chip bad">{item.denied === "judge" ? "judge denied" : item.denied === "rule" ? "denied" : "you denied"}</span>;
   else if (waiting) outcome = <span className="chip accent">waiting for you</span>;
   else if (item.status === "running") outcome = <span className="tool-meta">running</span>;
-  else if (item.isError) outcome = <span className="tool-meta bad">failed</span>;
-  else if (stats) outcome = <span className="tool-outcome"><span className="add">+{stats.added}</span> <span className="del">−{stats.removed}</span></span>;
+  else {
+    const meta = stats && !item.isError
+      ? <span className="tool-outcome"><span className="add">+{stats.added}</span> <span className="del">−{stats.removed}</span></span>
+      : item.outcome ? <span className={`tool-meta ${item.isError ? "bad" : ""}`}>{item.outcome}</span>
+      : item.isError ? <span className="tool-meta bad">failed</span> : null;
+    const who = item.approval?.allowed ? { user: "you allowed", judge: "judge allowed", rule: "allowed by rule" }[item.approval.by] : null;
+    outcome = <>{meta}{who && <span className={`chip ${item.approval?.by === "judge" ? "warn" : ""}`}>{who}</span>}</>;
+  }
+  const sub = item.name === "subagent" && (item.steps?.length || item.finish)
+    ? [item.steps?.length ? `↳ ${item.steps[item.steps.length - 1]}` : null,
+       item.finish ? `finished: ${item.finish.calls} model call${item.finish.calls === 1 ? "" : "s"}, ${item.finish.cost == null ? "cost unknown" : `$${item.finish.cost.toFixed(4)}`}` : null].filter(Boolean).join(" · ")
+    : "";
 
   return (
     <div className={`tool ${item.isError ? "error" : ""} ${item.denied ? "denied" : ""} ${waiting ? "waiting" : ""} ${open ? "open" : ""} ${item.status}`}>
@@ -65,6 +76,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
         <span className="tool-right">{outcome}</span>
         <Icon name={open ? "chevron-down" : "chevron-right"} size={12} className="chev" />
       </button>
+      {sub && <div className="tool-sub">{item.index != null && <span className="muted">[{item.index}] </span>}{sub}</div>}
       {nextStep && !open && <div className="tool-err">{nextStep}</div>}
       {open && (
         <div className="tool-body">

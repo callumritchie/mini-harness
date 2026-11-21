@@ -284,6 +284,29 @@ def test_describe_call_is_one_short_safe_line():
         assert line.startswith(name + "(") and "\x1b" not in line and "\n" not in line and len(line) < 300, line
 
 
+
+def test_outcome_says_how_a_call_went_from_our_own_result_text():
+    o = tools.outcome
+    assert o("bash", {}, "exit code: 0\nok", False) == "exit 0"
+    assert o("bash", {}, "Command exited with code 2.\nboom", True) == "exit 2"
+    assert o("read_file", {}, "     1\ta\n     2\tb", False) == "2 lines"
+    assert o("read_file", {}, "     1\ta\n[showing lines 1-1 of 900; call read_file again with offset=2 for more]", False) == "lines 1–1 of 900"
+    assert o("write_file", {}, "Created a.py (3 lines).", False) == "new file"
+    assert o("glob", {}, "a.py\nb.py", False) == "2 files" and o("grep", {}, "a.py:1:x", False) == "1 match"
+    assert o("grep", {}, "No matches for 'x' in the files that can be searched.", False) == "no matches"
+    assert o("ask_user", {}, "The user answered: Go", False) == "answered: Go"
+    assert o("edit_file", {}, "Edited", False) is None and o("read_file", {}, "nope", True) is None
+
+
+def test_a_front_end_that_does_not_know_an_event_shows_its_text():
+    from controller import UI
+    seen = []
+    ui = UI()
+    ui.notice = seen.append
+    ui.event("goal_round", {"n": 1}, "goal round 1: working...")
+    ui.event("goal_start", {"text": "x"}, "")  # nothing to show
+    assert seen == ["goal round 1: working..."]
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

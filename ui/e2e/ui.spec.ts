@@ -128,7 +128,8 @@ test("the whole demo walk-through", async ({ page }) => {
   await expect(page.locator(".tool.denied .chip").last()).toHaveText("you denied");
 
   await say("helpers");
-  await expect(page.locator(".toolgroup-head").last()).toContainText("3 subagents");
+  await expect(page.locator(".toolgroup-head").last()).toContainText("Ran 3 subagents in parallel");
+  await expect(page.locator(".tool-sub").first()).toContainText("finished: 1 model call");
   await idle();
   await expect(page.locator(".toolgroup-head").last()).toContainText("3 / 3 done");
   await page.screenshot({ path: shot("08-subagents") });
@@ -188,7 +189,7 @@ test("the whole demo walk-through", async ({ page }) => {
   await expect(outcome.getByRole("button", { name: "Run goal again" })).toBeEnabled();
   await page.screenshot({ path: shot("18-goal-result") });
   await outcome.getByRole("button", { name: "Show all rounds" }).click();
-  await expect(outcome.locator(".rounds li").first()).toContainText("Goal round 1");
+  await expect(outcome.locator(".rounds li").first()).toContainText("Round 1");
 
   // slash commands
   await box.fill("/perm");

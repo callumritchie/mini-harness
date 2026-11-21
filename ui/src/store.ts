@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import type { ClientRequest, CostSummary, Info, Mode, ServerEvent, SessionRow, TranscriptItem, Usage } from "./protocol";
+import type { Approval, ClientRequest, CostSummary, Info, Mode, ServerEvent, SessionRow, TranscriptItem, Usage } from "./protocol";
+import type { RoundLine } from "./lib/goal";
 import type { Socket } from "./socket";
 
 /** What the page remembers about a goal it started: enough to run it again and to say what it cost. */
@@ -9,7 +10,17 @@ export interface GoalRun {
   maxTurns?: number;
   costAtStart: number | null;
 }
+/** A goal as it runs, built from the server's goal events. */
+export interface GoalLive {
+  text: string;
+  verify: string | null;
+  maxTurns: number | null;
+  round: number;
+  lines: RoundLine[];
+}
+
 export interface GoalResult extends Omit<GoalRun, "costAtStart"> {
+  lines?: RoundLine[]; // every step of the run, for "Show all rounds"
   cost: number | null; // what this goal added to the session total, when both ends are known
   complete: boolean;
 }
@@ -27,7 +38,14 @@ export type Item =
       isError: boolean;
       status: "running" | "done";
       /** set when this failed call was a denial: who said no (the row then says so instead of showing the model-facing text) */
-      denied?: "user" | "judge";
+      denied?: "user" | "judge" | "rule";
+      approval?: Approval | null; // who decided, when the server says so
+      outcome?: string | null; // the server's few words on how it went
+      mcp?: boolean;
+      group?: string | null; // calls from one reply that ran at the same time share this
+      index?: number | null; // a parallel subagent's number ([1]..[4])
+      steps?: string[]; // what a subagent did, step by step
+      finish?: { calls: number; cost: number | null };
     }
   | { kind: "notice"; id: string; text: string; tone?: "stopped" | "unfinished" | "cutoff" }
   | { kind: "summary"; id: string; text: string }
@@ -41,6 +59,8 @@ export interface PermissionRequest {
   reasons: string[];
   note: string | null;
   kind: string;
+  toolId?: string | null;
+  hiddenExplanation?: string | null;
 }
 
 export interface AskRequest {
@@ -74,6 +94,7 @@ export interface ChatState {
   denial: "user" | "judge" | null;
   draft: string | null; // text a starter button wants put in the message box
   goalRun: GoalRun | null; // the goal started from this page, until its result arrives
+  goalLive: GoalLive | null; // the running goal's steps, from the server's goal events
 }
 
 let counter = 0;
@@ -101,6 +122,7 @@ export const initialState: ChatState = {
   denial: null,
   draft: null,
   goalRun: null,
+  goalLive: null,
 };
 
 /** One line describing a tool call, like the terminal's activity line. */
@@ -136,9 +158,34 @@ export function fromTranscript(items: TranscriptItem[]): Item[] {
           result: t.result,
           isError: t.is_error,
           status: "done",
+          outcome: t.outcome ?? null,
         };
     }
   });
+}
+
+let lineId = 0;
+type GoalEvent = Extract<ServerEvent, { type: "goal_round" | "goal_status" | "check_result" | "reviewer_verdict" }>;
+const STATUS: Record<"no_claim" | "no_evidence" | "claimed" | "reviewing", [RoundLine["marker"], string]> = {
+  no_claim: ["dot", "No claim of done yet; asked it to carry on"],
+  no_evidence: ["bad", "Claimed done without evidence; sent back"],
+  claimed: ["ok", "Claims it is done"],
+  reviewing: ["dot", "A fresh read-only reviewer is checking the work…"],
+};
+
+/** One line of the goal card for one goal event. */
+export function goalLine(ev: GoalEvent): RoundLine {
+  const id = `g${++lineId}`;
+  switch (ev.type) {
+    case "goal_round":
+      return { id, marker: ev.n, text: `Round ${ev.n}: working…` };
+    case "goal_status":
+      return { id, marker: STATUS[ev.status][0], text: STATUS[ev.status][1] };
+    case "check_result":
+      return { id, marker: ev.passed ? "ok" : "bad", text: ev.passed ? `Check ${ev.cmd} passed` : `Check ${ev.cmd} failed (exit ${ev.exit_code})` };
+    case "reviewer_verdict":
+      return { id, marker: ev.verdict ? "ok" : ev.verdict === false ? "bad" : "dot", text: `Reviewer: ${ev.verdict ? "done" : ev.verdict === false ? "not done" : "unclear"}` };
+  }
 }
 
 /** How the screen changes when the server says something. Pure, so it can be tested without a browser. */
@@ -163,17 +210,40 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
         ...s,
         items: [
           ...finishStreaming(s.items),
-          { kind: "tool", id: ev.id, name: ev.name, display: ev.display, input: ev.input, result: null, isError: false, status: "running" },
+          { kind: "tool", id: ev.id, name: ev.name, display: ev.display, input: ev.input, result: null, isError: false, status: "running", group: ev.parallel_group ?? null },
         ],
       };
     }
     case "tool_result": {
-      const denied = ev.is_error ? s.denial : null;
+      // a server that says who decided is exact; an older one leaves us the guess: the next error after a denial is that call
+      const exact = ev.approval !== undefined;
+      const denied = exact ? (ev.approval && !ev.approval.allowed ? ev.approval.by : null) : ev.is_error ? s.denial : null;
+      const extra = { approval: ev.approval ?? null, outcome: ev.outcome ?? null, mcp: ev.mcp ?? false };
       return {
         ...s,
-        denial: ev.is_error ? null : s.denial,
-        items: s.items.map((i) => (i.kind === "tool" && i.id === ev.id ? { ...i, result: ev.text, isError: ev.is_error, status: "done", ...(denied ? { denied } : {}) } : i)),
+        denial: exact || ev.is_error ? null : s.denial,
+        items: s.items.map((i) => (i.kind === "tool" && i.id === ev.id ? { ...i, ...extra, result: ev.text, isError: ev.is_error, status: "done", ...(denied ? { denied } : {}) } : i)),
       };
+    }
+    case "subagent_step":
+    case "subagent_finish":
+      return {
+        ...s,
+        items: s.items.map((i) => {
+          if (i.kind !== "tool" || i.id !== ev.parent_id) return i;
+          return ev.type === "subagent_step"
+            ? { ...i, index: ev.index, steps: [...(i.steps ?? []), ev.display] }
+            : { ...i, index: ev.index, finish: { calls: ev.calls, cost: ev.cost } };
+        }),
+      };
+    case "goal_start":
+      return { ...s, goalLive: { text: ev.text, verify: ev.verify, maxTurns: ev.max_turns, round: 0, lines: [] } };
+    case "goal_round":
+    case "goal_status":
+    case "check_result":
+    case "reviewer_verdict": {
+      const g = s.goalLive ?? { text: "", verify: null, maxTurns: null, round: 0, lines: [] };
+      return { ...s, goalLive: { ...g, round: ev.type === "goal_round" ? ev.n : g.round, lines: [...g.lines, goalLine(ev)] } };
     }
     case "usage":
       return { ...s, lastUsage: ev.usage, totalCost: ev.total };
@@ -188,7 +258,11 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       };
     }
     case "permission_request":
-      return { ...s, permission: { id: ev.id, title: ev.title, display: ev.display, findings: ev.findings, reasons: ev.reasons, note: ev.note, kind: ev.kind } };
+      return {
+        ...s,
+        permission: { id: ev.id, title: ev.title, display: ev.display, findings: ev.findings, reasons: ev.reasons, note: ev.note, kind: ev.kind,
+                      toolId: ev.tool_id ?? null, hiddenExplanation: ev.hidden_explanation ?? null },
+      };
     case "ask_user":
       return { ...s, ask: { id: ev.id, question: ev.question, choices: ev.choices } };
     case "question_closed":
@@ -203,17 +277,18 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       if (ev.error) items = [...items, { kind: "error", id: nextId("e"), text: ev.error }];
       else if (ev.interrupted) items = [...items, note("Stopped. That turn was dropped from the conversation.", "stopped")];
       else if (ev.text.startsWith("GOAL")) {
-        const run = s.goalRun;
+        const live = s.goalLive;
+        const run = s.goalRun ?? (live ? { text: live.text, verify: live.verify ?? undefined, maxTurns: live.maxTurns ?? undefined, costAtStart: null } : null);
         const end = ev.info.cost.usd;
         const goal: GoalResult | undefined = run ? {
-          text: run.text, verify: run.verify, maxTurns: run.maxTurns,
+          text: run.text, verify: run.verify, maxTurns: run.maxTurns, lines: s.goalLive?.lines,
           cost: run.costAtStart !== null && end !== null ? Math.max(0, end - run.costAtStart) : null, complete: ev.info.cost.complete,
         } : undefined;
         items = [...items, { kind: "assistant", id: nextId("a"), text: ev.text, streaming: false, ...(goal ? { goal } : {}) }];
       }
       else if (ev.stopped) items = [...items, note(`Not finished: ${ev.stopped}`, "unfinished")];
       else if (ev.cut_off) items = [...items, note("Cut off. The reply hit its maximum length.", "cutoff")];
-      return { ...s, items, running: false, info: ev.info, totalCost: ev.info.cost, permission: null, ask: null, denial: null, goalRun: null };
+      return { ...s, items, running: false, info: ev.info, totalCost: ev.info.cost, permission: null, ask: null, denial: null, goalRun: null, goalLive: null };
     }
     case "session_loaded":
       return {
@@ -227,6 +302,7 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
         permission: null,
         ask: null,
         denial: null,
+        goalLive: null,
         running: false,
       };
     case "error":

@@ -101,14 +101,18 @@ with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
     # a delete asks, with the exact command; deny keeps the file, allow removes it
     ws.send_json({"type": "send", "text": "delete it"})
     ev = collect(ws, "permission_request"); req = ev[-1]
-    assert req["title"] == "run a command" and any("rm demo.py" in l for l in req["display"]) and any("rm is not on the read-only list" in r for r in req["reasons"])
+    assert req["title"] == "Run a command?" and any("rm demo.py" in l for l in req["display"]) and any("rm is not on the read-only list" in r for r in req["reasons"])
+    assert req["hidden_explanation"] is None
+    call = next(e for e in reversed(ev) if e["type"] == "tool_call"); assert req["tool_id"] == call["id"]  # the question names its call
     ws.send_json({"type": "answer_permission", "id": req["id"], "allow": False})
     ev = collect(ws, "done")
     assert (project / "demo.py").exists() and any(e["type"] == "tool_result" and e["is_error"] and "declined" in e["text"] for e in ev)
+    res = next(e for e in ev if e["type"] == "tool_result"); assert res["id"] == call["id"] and res["approval"] == {"by": "user", "allowed": False}
     ws.send_json({"type": "send", "text": "delete it"})
     req = collect(ws, "permission_request")[-1]
     ws.send_json({"type": "answer_permission", "id": req["id"], "allow": True})
-    collect(ws, "done")
+    ev = collect(ws, "done")
+    res = next(e for e in ev if e["type"] == "tool_result"); assert res["approval"] == {"by": "user", "allowed": True} and res["outcome"] == "exit 0"
     assert not (project / "demo.py").exists()
     # a garbage answer is not a yes
     ws.send_json({"type": "send", "text": "create a file"}); collect(ws, "done")
@@ -129,6 +133,23 @@ with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
     ws.send_json({"type": "answer_ask", "id": ask["id"], "answer": "Go"})
     ev = collect(ws, "done"); assert "**Go**" in "".join(e["text"] for e in ev if e["type"] == "text_delta")
 
+    # parallel subagents: one group id, structured steps instead of [n]↳ notices, and a short outcome on each row
+    ws.send_json({"type": "send", "text": "helpers"})
+    ev = collect(ws, "done"); calls = [e for e in ev if e["type"] == "tool_call" and e["name"] == "subagent"]
+    assert len(calls) == 3 and {c["parallel_group"] for c in calls} == {calls[0]["id"]}
+    fins = [e for e in ev if e["type"] == "subagent_finish"]
+    assert sorted(f["index"] for f in fins) == [1, 2, 3] and {f["parent_id"] for f in fins} == {c["id"] for c in calls}
+    assert not any(e["type"] == "notice" and "subagent finished" in e["text"] for e in ev)
+    ws.send_json({"type": "send", "text": "list the files"})
+    res = next(e for e in collect(ws, "done") if e["type"] == "tool_result"); assert res["outcome"].endswith("files") and res["approval"] is None and res["mcp"] is False
+
+    # a goal reports its progress as events: start, rounds, statuses (the demo never claims done, so it stops at the limit)
+    ws.send_json({"type": "goal", "text": "tidy up", "verify": "true", "max_turns": 2})
+    ev = collect(ws, "done"); t = types(ev)
+    start = next(e for e in ev if e["type"] == "goal_start"); assert start["text"] == "tidy up" and start["verify"] == "true" and start["max_turns"] == 2
+    assert [e["n"] for e in ev if e["type"] == "goal_round"][:2] == [1, 2] and "goal_status" in t
+    assert not any(e["type"] == "notice" and e["text"].startswith("goal round") for e in ev) and ev[-1]["text"].startswith("GOAL NOT DONE")
+
     # settings
     ws.send_json({"type": "set_permissions", "mode": "judge"}); assert collect(ws, "info")[-1]["info"]["permissions"] == "judge"
     ws.send_json({"type": "set_permissions", "mode": "nope"}); assert "Unknown mode" in collect(ws, "error")[-1]["message"]; collect(ws, "info")  # (the info that follows)
@@ -143,7 +164,7 @@ with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
     items = client.get(f"/api/session/{sid}", headers=H).json()["items"]
     kinds = [i["kind"] for i in items]
     assert kinds[0] == "user" and items[0]["text"] == "hello" and "tool" in kinds and "assistant" in kinds
-    tool = next(i for i in items if i["kind"] == "tool" and i["name"] == "write_file"); assert tool["result"].startswith("Created")
+    tool = next(i for i in items if i["kind"] == "tool" and i["name"] == "write_file"); assert tool["result"].startswith("Created") and tool["outcome"] == "new file"
     assert client.get("/api/session/nope", headers=H).status_code == 404
     listed = client.get("/api/sessions", headers=H).json(); assert listed[0]["current"] and listed[0]["title"] == "hello" and listed[0]["cost"] > 0
 

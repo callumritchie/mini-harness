@@ -109,3 +109,41 @@ describe("a denied call", () => {
     expect(plain.items[0]).not.toHaveProperty("denied");
   });
 });
+
+describe("structured events from the server", () => {
+  const call = { type: "tool_call" as const, id: "t1", name: "bash", input: { command: "rm x" }, display: "bash(rm x)" };
+
+  it("takes who decided from the result, and the outcome with it", () => {
+    const allowed = run([call, { type: "tool_result", id: "t1", name: "bash", text: "exit code: 0", is_error: false, outcome: "exit 0", approval: { by: "judge", allowed: true }, mcp: false }]);
+    expect(allowed.items[0]).toMatchObject({ outcome: "exit 0", approval: { by: "judge", allowed: true } });
+    expect(allowed.items[0]).not.toHaveProperty("denied");
+    // an exact answer wins over the old guess
+    const denied = run([call, { type: "tool_result", id: "t1", name: "bash", text: "no", is_error: true, approval: { by: "user", allowed: false } }], { ...initialState, denial: "judge" });
+    expect(denied.items[0]).toMatchObject({ denied: "user" });
+    expect(denied.denial).toBeNull();
+  });
+
+  it("puts parallel group and subagent steps on the call", () => {
+    const s = run([
+      { ...call, name: "subagent", parallel_group: "t1" },
+      { type: "subagent_step", parent_id: "t1", index: 1, display: "read_file(a.py)" },
+      { type: "subagent_finish", parent_id: "t1", index: 1, calls: 2, cost: 0.003 },
+    ]);
+    expect(s.items[0]).toMatchObject({ group: "t1", index: 1, steps: ["read_file(a.py)"], finish: { calls: 2, cost: 0.003 } });
+  });
+
+  it("builds the goal card from goal events, and hands its steps to the result", () => {
+    let s = run([
+      { type: "goal_start", text: "tidy", verify: "true", max_turns: 2 },
+      { type: "goal_round", n: 1 },
+      { type: "goal_status", status: "claimed" },
+      { type: "check_result", cmd: "true", passed: false, exit_code: 1 },
+    ]);
+    expect(s.goalLive).toMatchObject({ text: "tidy", verify: "true", maxTurns: 2, round: 1 });
+    expect(s.goalLive?.lines.map((l) => l.marker)).toEqual([1, "ok", "bad"]);
+    s = reduce(s, { type: "done", text: "GOAL NOT DONE after 1 round(s): x", stop_reason: null, cut_off: false, interrupted: false, stopped: "x", error: null, info });
+    expect(s.goalLive).toBeNull();
+    expect(s.items[0]).toMatchObject({ kind: "assistant", goal: { text: "tidy", verify: "true", maxTurns: 2 } });
+    expect((s.items[0] as { goal: { lines: unknown[] } }).goal.lines).toHaveLength(3);
+  });
+});

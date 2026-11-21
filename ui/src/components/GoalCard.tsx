@@ -17,15 +17,18 @@ export function GoalCard() {
   const items = useStore((s) => s.items);
   const running = useStore((s) => s.running);
   const run = useStore((s) => s.goalRun);
+  const live = useStore((s) => s.goalLive);
   const mode = useStore((s) => s.info?.permissions);
   const cancel = useStore((s) => s.cancel);
-  const g = useMemo(() => goalSummary(items, running), [items, running]);
+  const fallback = useMemo(() => (live ? null : goalSummary(items, running)), [live, items, running]);
+  const g = live && running ? { text: live.text, round: live.round || 1 } : fallback;
   const lines = useMemo(() => {
-    if (!g) return [];
+    if (live) return live.lines.map((l, i) => (i === live.lines.length - 1 ? { ...l, marker: "spin" as const } : l));
+    if (!fallback) return [];
     let start = items.length - 1;
     while (start >= 0 && !(items[start].kind === "user" && (items[start] as { text: string }).text.startsWith("/goal"))) start--;
     return roundLines(items.slice(start + 1), true);
-  }, [g, items]);
+  }, [live, fallback, items]);
   if (!g) return null;
   return (
     <section className="goalcard" aria-label="Goal progress">
@@ -33,8 +36,8 @@ export function GoalCard() {
         <div className="goal-headline"><span className="goal-tag">GOAL</span><span className="goal-round">Round {g.round} · working</span><Spinner /></div>
         <div className="goalcard-text">{g.text}</div>
         <div className="goal-meta">
-          {run?.verify && <>Check <code>{run.verify}</code> · </>}
-          {run?.maxTurns && <>up to {run.maxTurns} turns · </>}
+          {(live?.verify ?? run?.verify) && <>Check <code>{live?.verify ?? run?.verify}</code> · </>}
+          {(live?.maxTurns ?? run?.maxTurns) && <>up to {live?.maxTurns ?? run?.maxTurns} turns · </>}
           can't ask you questions
         </div>
       </div>

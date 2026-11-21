@@ -49,6 +49,19 @@ def file_text(text):
 
 # ---------- the UI the controller talks to ----------
 
+HIDDEN_EXPLANATION = ("This action contains characters you can't normally see. They are shown as markers like ⟨U+202E⟩; "
+                      "they can make text look different from what actually runs.")
+
+
+def ui_title(title):
+    """The policy's title ("run a command") as the dialog's question ("Run a command?")."""
+    title = title.strip()
+    if not title:
+        return title
+    title = title[0].upper() + title[1:]
+    return title if title[-1] in "?.!" else title + "?"
+
+
 class WebUI(UI):
     """Turns what the agent does into JSON events for the browser, and the browser's answers back into return values.
     The agent runs in a worker thread; events are handed to the asyncio loop thread-safely."""
@@ -61,6 +74,8 @@ class WebUI(UI):
         self.changes = {}  # path -> {"before": first before, "after": latest after}
         self.running = False
         self.controller = None
+        self.calls = {}  # call id -> (name, args): what a result needs to describe itself
+        self.groups = {}  # call id -> the parallel group it belongs to (the first call's id)
 
     # --- connection ---
 
@@ -84,11 +99,30 @@ class WebUI(UI):
     def text(self, delta):
         self.emit("text_delta", text=safety.printable(delta))
 
+    def parallel(self, call_ids):
+        with self.lock:
+            for cid in call_ids:
+                self.groups[cid] = call_ids[0]
+
     def tool_call(self, call_id, name, args, display):
-        self.emit("tool_call", id=call_id, name=name, input=clean(args), display=safety.visible(display, limit=300))
+        with self.lock:
+            self.calls[call_id] = (name, args)
+            group = self.groups.get(call_id)
+        self.emit("tool_call", id=call_id, name=name, input=clean(args), display=safety.visible(display, limit=300), parallel_group=group)
 
     def tool_result(self, call_id, name, text, is_error):
-        self.emit("tool_result", id=call_id, name=name, text=clean(text, tools.MAX_TOOL_OUTPUT), is_error=bool(is_error))
+        with self.lock:
+            _, args = self.calls.pop(call_id, (name, {}))
+            self.groups.pop(call_id, None)
+        ctl = self.controller
+        approval = ctl.permissions.approvals.pop(call_id, None) if ctl is not None and getattr(ctl, "permissions", None) else None
+        mcp = bool(ctl is not None and ctl.mcp is not None and ctl.mcp.owns(name))
+        self.emit("tool_result", id=call_id, name=name, text=clean(text, tools.MAX_TOOL_OUTPUT), is_error=bool(is_error),
+                  outcome=tools.outcome(name, args, text, is_error), approval=approval, mcp=mcp)
+
+    def event(self, kind, data, text):
+        """Goal and subagent progress as structured events (the browser builds its cards from them); the text is not sent."""
+        self.emit(kind, **{k: clean(v, 1000) if isinstance(v, str) else v for k, v in data.items()})
 
     def usage(self, usage, cost, summary):
         usd, complete, note = summary
@@ -126,10 +160,11 @@ class WebUI(UI):
             self.emit("question_closed", id=request["id"])
 
     def ask_permission(self, assessment, note):
-        request = {"type": "permission_request", "id": secrets.token_hex(6), "title": assessment.title,
+        request = {"type": "permission_request", "id": secrets.token_hex(6), "title": ui_title(assessment.title),
                    "display": [safety.printable(l) for l in assessment.display.split("\n")],
                    "findings": [f.text for f in assessment.findings], "reasons": [text for _, text in assessment.reasons],
-                   "note": note, "kind": assessment.kind}
+                   "note": note, "kind": assessment.kind, "tool_id": getattr(assessment, "call_id", None),
+                   "hidden_explanation": HIDDEN_EXPLANATION if assessment.findings else None}
         return self._ask(request) is True  # only an explicit true allows
 
     def ask_user(self, question, choices):
@@ -232,7 +267,11 @@ def create_app(controller, webui, token, port, dev_origins=()):
         else:
             events, _ = sessionlog.load(path)
             messages = sessionlog.replay(events)["messages"]
-        return clean(sessionlog.render_messages(messages), 20000)
+        items = sessionlog.render_messages(messages)
+        for item in items:  # the same short outcome a live tool row gets, so a reloaded page reads the same
+            if item.get("kind") == "tool" and item.get("result") is not None:
+                item["outcome"] = tools.outcome(item.get("name"), item.get("input") or {}, item["result"], item.get("is_error"))
+        return clean(items, 20000)
 
     @app.get("/api/session/{session_id}")
     def session_transcript(session_id: str):

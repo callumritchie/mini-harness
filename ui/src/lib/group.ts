@@ -18,8 +18,10 @@ export function groupItems(items: Item[]): Entry[] {
   return out;
 }
 
-/** "3 subagents" when every call is a subagent, otherwise "4 steps". */
+/** "3 subagents" when every call is a subagent, otherwise "4 steps"; "Ran … in parallel" only when the server says they ran together. */
 export function groupLabel(tools: ToolItem[]): string {
   const n = tools.length;
-  return tools.every((t) => t.name === "subagent") ? `${n} subagent${n === 1 ? "" : "s"}` : `${n} step${n === 1 ? "" : "s"}`;
+  const what = tools.every((t) => t.name === "subagent") ? `${n} subagent${n === 1 ? "" : "s"}` : `${n} step${n === 1 ? "" : "s"}`;
+  const parallel = n > 1 && tools[0].group != null && tools.every((t) => t.group === tools[0].group);
+  return parallel ? `Ran ${what} in parallel` : what;
 }

@@ -39,13 +39,34 @@ export interface Usage {
   searches?: number;
 }
 
+export interface Approval {
+  by: "rule" | "judge" | "user";
+  allowed: boolean;
+}
+
 export type ServerEvent =
   | { type: "hello"; info: Info; running: boolean; demo: boolean }
   | { type: "info"; info: Info }
   | { type: "status"; running: boolean }
   | { type: "text_delta"; text: string }
-  | { type: "tool_call"; id: string; name: string; input: Record<string, unknown>; display: string }
-  | { type: "tool_result"; id: string; name: string; text: string; is_error: boolean }
+  | { type: "tool_call"; id: string; name: string; input: Record<string, unknown>; display: string; parallel_group?: string | null }
+  | {
+      type: "tool_result";
+      id: string;
+      name: string;
+      text: string;
+      is_error: boolean;
+      outcome?: string | null; // a few words on how it went ("612 lines", "exit 1"), made by the server
+      approval?: Approval | null; // who decided a risky call; null when nothing was asked
+      mcp?: boolean; // the result came from an MCP server (its first line says so)
+    }
+  | { type: "subagent_step"; parent_id: string; index: number | null; display: string }
+  | { type: "subagent_finish"; parent_id: string; index: number | null; calls: number; cost: number | null }
+  | { type: "goal_start"; text: string; verify: string | null; max_turns: number | null }
+  | { type: "goal_round"; n: number }
+  | { type: "goal_status"; status: "no_claim" | "no_evidence" | "claimed" | "reviewing" }
+  | { type: "check_result"; cmd: string; passed: boolean; exit_code: number }
+  | { type: "reviewer_verdict"; verdict: boolean | null }
   | { type: "usage"; usage: Usage; cost: number | null; total: CostSummary }
   | { type: "notice"; text: string }
   | { type: "file_change"; path: string; before: string | null; after: string | null }
@@ -58,6 +79,8 @@ export type ServerEvent =
       reasons: string[];
       note: string | null;
       kind: string;
+      tool_id?: string | null; // the tool call this question is about
+      hidden_explanation?: string | null; // a sentence for the findings panel, when there are findings
     }
   | { type: "ask_user"; id: string; question: string; choices: string[] }
   | { type: "question_closed"; id: string }
@@ -78,7 +101,7 @@ export type TranscriptItem =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
   | { kind: "summary"; text: string }
-  | { kind: "tool"; id: string; name: string; input: Record<string, unknown>; result: string | null; is_error: boolean };
+  | { kind: "tool"; id: string; name: string; input: Record<string, unknown>; result: string | null; is_error: boolean; outcome?: string | null };
 
 export type ClientRequest =
   | { type: "send"; text: string }

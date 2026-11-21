@@ -52,6 +52,7 @@ export function PermissionDialog() {
           {hidden && (
             <div className="findings">
               <div className="ftitle">Hidden characters found</div>
+              {p.hiddenExplanation && <div className="fbody">{p.hiddenExplanation}</div>}
               <ul>
                 {p.findings.map((f, i) => (
                   <li key={i}>Hidden: {f}</li>

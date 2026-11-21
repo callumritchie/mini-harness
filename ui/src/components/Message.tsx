@@ -30,7 +30,7 @@ function GoalOutcome({ item, span }: { item: Assistant; span?: Item[] }) {
   const done = item.text.startsWith("GOAL DONE");
   const rounds = /after (\d+) round/.exec(item.text)?.[1];
   const body = item.text.replace(/^GOAL (NOT )?DONE\s*/, "").replace(/^after \d+ round\(s\)\s*[:.]?\s*/, "");
-  const lines = all && span ? roundLines(span, false) : [];
+  const lines = !all ? [] : item.goal?.lines?.length ? item.goal.lines : span ? roundLines(span, false) : [];
   const g = item.goal;
   return (
     <div className={`outcome ${done ? "done" : "notdone"}`}>
@@ -47,7 +47,7 @@ function GoalOutcome({ item, span }: { item: Assistant; span?: Item[] }) {
       {(g || (span && span.length > 0)) && (
         <div className="outcome-actions">
           {g && <button className="btn btn-sm" disabled={running} onClick={() => goal(g.text, g.verify, g.maxTurns)}>Run goal again</button>}
-          {span && span.length > 0 && <button className="btn-text" onClick={() => setAll(!all)} aria-expanded={all}>{all ? "Hide rounds" : "Show all rounds"}</button>}
+          {(g?.lines?.length || (span && span.length > 0)) ? <button className="btn-text" onClick={() => setAll(!all)} aria-expanded={all}>{all ? "Hide rounds" : "Show all rounds"}</button> : null}
         </div>
       )}
     </div>
