@@ -24,6 +24,7 @@ export function ContextPanel() {
   if (error) return <div className="error-line">{error}</div>;
   if (!data) return <div className="empty-panel">Loading…</div>;
   const entries = Object.entries(data.rows).filter(([, n]) => n > 0);
+  const hasOverhead = entries.some(([l]) => l.startsWith("Provider overhead"));
   const colour = (label: string) => COLORS[entries.findIndex(([l]) => l === label) % COLORS.length];
   const top = entries.filter(([l]) => !CONVERSATION.includes(l));
   const convo = entries.filter(([l]) => CONVERSATION.includes(l));
@@ -73,7 +74,13 @@ export function ContextPanel() {
           </li>
         )}
       </ul>
-      <div className="hint">Estimated at about 4 characters per token. “Provider overhead” is the real count minus our estimate, mostly the provider's own web search instructions.</div>
+      <div className="hint">
+        {hasOverhead
+          ? "Estimated at about 4 characters per token. “Provider overhead” is the real count minus our estimate, mostly the provider's own web search instructions."
+          : used !== null
+            ? "Estimated at about 4 characters per token; the estimate is a little above the real count this time."
+            : "Estimated at about 4 characters per token."}
+      </div>
       </section>
       <section className="ccard">
         <h3 className="eyebrow">Compaction</h3>

@@ -91,3 +91,21 @@ describe("describeCall", () => {
     expect(describeCall("grep", { pattern: "x".repeat(200) }).length).toBeLessThan(140);
   });
 });
+
+describe("a denied call", () => {
+  const call = { type: "tool_call" as const, id: "t1", name: "bash", input: { command: "rm x" }, display: "bash(rm x)" };
+  const failed = { type: "tool_result" as const, id: "t1", name: "bash", text: "The user declined this. Do not repeat it.", is_error: true };
+
+  it("is marked on the row when an error result follows the user saying no", () => {
+    const s = run([call, failed], { ...initialState, denial: "user" });
+    expect(s.items[0]).toMatchObject({ kind: "tool", isError: true, denied: "user", result: failed.text });
+    expect(s.denial).toBeNull();
+  });
+
+  it("is marked as the judge's when a judge deny notice came first, and not for ordinary errors", () => {
+    const j = run([{ type: "notice", text: "  judge: deny - deletes files" }, call, failed]);
+    expect(j.items.find((i) => i.kind === "tool")).toMatchObject({ denied: "judge" });
+    const plain = run([call, failed]);
+    expect(plain.items[0]).not.toHaveProperty("denied");
+  });
+});

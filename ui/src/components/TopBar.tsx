@@ -6,7 +6,10 @@ export function TopBar() {
   const info = useStore((s) => s.info);
   const last = useStore((s) => s.lastUsage);
   const demo = useStore((s) => s.demo);
-  const sessionTitle = useStore((s) => s.sessions.find((r) => r.current)?.title);
+  const sessionTitle = useStore((s) => {
+    const row = s.sessions.find((r) => r.current);
+    return row ? (row.prompts === 0 ? "New session" : row.title) : undefined;
+  });
   const s = useStore();
   if (!info) return <header className="topbar"><span className="muted">Connecting…</span></header>;
 

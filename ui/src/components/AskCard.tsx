@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 
 /** The ask_user question, inline in the chat: numbered choices, or your own answer. */
@@ -6,11 +6,26 @@ export function AskCard() {
   const ask = useStore((s) => s.ask);
   const answer = useStore((s) => s.answerAsk);
   const [text, setText] = useState("");
+  const card = useRef<HTMLDivElement>(null);
+  const had = useRef(false);
+  const id = ask?.id;
+
+  // a question appearing takes focus (first choice, or the text field); when it closes focus goes back to the message box
+  useEffect(() => {
+    if (id) {
+      had.current = true;
+      card.current?.querySelector<HTMLElement>(".choices button, .ask-form input")?.focus();
+    } else if (had.current) {
+      had.current = false;
+      document.getElementById("composer")?.focus();
+    }
+  }, [id]);
+
   if (!ask) return null;
   return (
-    <div className="ask" role="group" aria-label="Question from the agent">
-      <div className="eyebrow">The agent is waiting for your answer</div>
-      <div className="ask-q">{ask.question}</div>
+    <div className="ask" role="group" aria-labelledby="ask-eyebrow ask-q" ref={card}>
+      <div className="eyebrow" id="ask-eyebrow">The agent is waiting for your answer</div>
+      <div className="ask-q" id="ask-q">{ask.question}</div>
       {ask.choices.length > 0 && (
         <ol className="choices">
           {ask.choices.map((c, i) => (

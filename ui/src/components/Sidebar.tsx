@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useStore } from "../store";
 import { formatCost } from "../lib/lang";
 import type { SessionRow } from "../protocol";
@@ -5,6 +6,11 @@ import { Logo } from "./Logo";
 
 const when = (iso: string, today: boolean) =>
   today ? new Date(iso).toLocaleTimeString([], { timeStyle: "short" }) : new Date(iso).toLocaleDateString([], { dateStyle: "medium" });
+
+/** A session with no prompt yet is not listed: there is nothing to come back to. */
+export function listed(sessions: SessionRow[]) {
+  return sessions.filter((s) => s.prompts > 0);
+}
 
 function groups(sessions: SessionRow[]) {
   const start = new Date(); start.setHours(0, 0, 0, 0);
@@ -15,7 +21,8 @@ function groups(sessions: SessionRow[]) {
 
 export function Sidebar() {
   const open = useStore((s) => s.sidebarOpen);
-  const sessions = useStore((s) => s.sessions);
+  const all = useStore((s) => s.sessions);
+  const sessions = useMemo(() => listed(all), [all]);
   const info = useStore((s) => s.info);
   const running = useStore((s) => s.running);
   const newSession = useStore((s) => s.newSession);
@@ -53,7 +60,7 @@ export function Sidebar() {
             ),
           )}
         </div>
-        {info && (
+        {info && (info.agents_md || info.skills.length > 0 || info.mcp_tools.length > 0) && (
           <div className="side-foot">
             {info.agents_md && <span className="fchip">AGENTS.md loaded</span>}
             {info.skills.length > 0 && <span className="fchip">{info.skills.length} skill{info.skills.length === 1 ? "" : "s"}</span>}

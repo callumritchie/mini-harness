@@ -14,6 +14,8 @@ export type Item =
       result: string | null;
       isError: boolean;
       status: "running" | "done";
+      /** set when this failed call was a denial: who said no (the row then says so instead of showing the model-facing text) */
+      denied?: "user" | "judge";
     }
   | { kind: "notice"; id: string; text: string; tone?: "stopped" | "unfinished" | "cutoff" }
   | { kind: "summary"; id: string; text: string }
@@ -56,6 +58,8 @@ export interface ChatState {
   selectedFile: string | null;
   showGoal: boolean;
   confirmAllow: boolean;
+  /** a denial whose tool result has not arrived yet; until the server sends tool ids, the next error result is taken to be that call */
+  denial: "user" | "judge" | null;
   draft: string | null; // text a starter button wants put in the message box
 }
 
@@ -81,6 +85,7 @@ export const initialState: ChatState = {
   selectedFile: null,
   showGoal: false,
   confirmAllow: false,
+  denial: null,
   draft: null,
 };
 
@@ -148,15 +153,18 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
         ],
       };
     }
-    case "tool_result":
+    case "tool_result": {
+      const denied = ev.is_error ? s.denial : null;
       return {
         ...s,
-        items: s.items.map((i) => (i.kind === "tool" && i.id === ev.id ? { ...i, result: ev.text, isError: ev.is_error, status: "done" } : i)),
+        denial: ev.is_error ? null : s.denial,
+        items: s.items.map((i) => (i.kind === "tool" && i.id === ev.id ? { ...i, result: ev.text, isError: ev.is_error, status: "done", ...(denied ? { denied } : {}) } : i)),
       };
+    }
     case "usage":
       return { ...s, lastUsage: ev.usage, totalCost: ev.total };
     case "notice":
-      return { ...s, items: [...s.items, { kind: "notice", id: nextId("n"), text: ev.text }] };
+      return { ...s, denial: /^\s*judge: deny/.test(ev.text) ? "judge" : s.denial, items: [...s.items, { kind: "notice", id: nextId("n"), text: ev.text }] };
     case "file_change": {
       const existing = s.changes[ev.path];
       return {
@@ -183,7 +191,7 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       else if (ev.text.startsWith("GOAL")) items = [...items, { kind: "assistant", id: nextId("a"), text: ev.text, streaming: false }];
       else if (ev.stopped) items = [...items, note(`Not finished: ${ev.stopped}`, "unfinished")];
       else if (ev.cut_off) items = [...items, note("The reply was cut off at the maximum length.", "cutoff")];
-      return { ...s, items, running: false, info: ev.info, totalCost: ev.info.cost, permission: null, ask: null };
+      return { ...s, items, running: false, info: ev.info, totalCost: ev.info.cost, permission: null, ask: null, denial: null };
     }
     case "session_loaded":
       return {
@@ -196,6 +204,7 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
         lastUsage: null,
         permission: null,
         ask: null,
+        denial: null,
         running: false,
       };
     case "error":
@@ -295,7 +304,7 @@ export const useStore = create<ChatState & Actions>((set, get) => {
     cancel: () => void request({ type: "cancel" }),
     answerPermission(allow) {
       const p = get().permission;
-      if (p && request({ type: "answer_permission", id: p.id, allow })) set({ permission: null });
+      if (p && request({ type: "answer_permission", id: p.id, allow })) set({ permission: null, ...(allow ? {} : { denial: "user" as const }) });
     },
     answerAsk(answer) {
       const a = get().ask;

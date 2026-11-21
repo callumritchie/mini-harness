@@ -265,6 +265,7 @@ kbd { font-family: inherit; font-size: 11px; background: var(--panel); border: 1
 .toolgroup-label { font-weight: 600; color: var(--text-2); }
 .toolgroup .tool + .tool { border-top: 1px solid var(--line); }
 .tool { background: var(--panel); overflow: hidden; }
+.tool-err.denied { color: var(--muted); }
 .tool-err { padding: 0 10px 6px 34px; font-size: var(--fs-sm); color: var(--bad); white-space: pre-wrap; word-break: break-word; }
 .tool-outcome { font-size: var(--fs-sm); font-variant-numeric: tabular-nums; flex: none; }
 .st { width: 14px; text-align: center; font-weight: 700; font-size: var(--fs-sm); } .st.ok { color: var(--ok); } .st.bad { color: var(--bad); }

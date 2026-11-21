@@ -6,6 +6,8 @@ import { AskCard } from "../src/components/AskCard";
 import { ToolCard } from "../src/components/ToolCard";
 import { DiffView } from "../src/components/DiffView";
 import { filterTree } from "../src/components/FilesPanel";
+import { listed } from "../src/components/Sidebar";
+import { permissionTitle } from "../src/lib/lang";
 import { ConfirmAllow } from "../src/components/ConfirmAllow";
 import type { Info } from "../src/protocol";
 import { initialState, useStore } from "../src/store";
@@ -194,5 +196,51 @@ describe("filterTree", () => {
     expect(filterTree(tree, "readme").map((n) => n.path)).toEqual(["README.md"]);
     expect(filterTree(tree, "zzz")).toEqual([]);
     expect(filterTree(tree, "  ")).toBe(tree);
+  });
+});
+
+describe("ask card focus", () => {
+  it("focuses the first choice when a question appears, and the message box when it closes", () => {
+    const box = document.createElement("textarea");
+    box.id = "composer";
+    document.body.appendChild(box);
+    render(<AskCard />);
+    act(() => useStore.setState({ ask: { id: "a1", question: "Python or Go?", choices: ["Python", "Go"] } }));
+    expect(document.activeElement).toBe(screen.getByText("Python").closest("button"));
+    act(() => useStore.setState({ ask: null }));
+    expect(document.activeElement).toBe(box);
+    box.remove();
+  });
+
+  it("focuses the text field when there are no choices", () => {
+    render(<AskCard />);
+    act(() => useStore.setState({ ask: { id: "a2", question: "Which file?", choices: [] } }));
+    expect(document.activeElement).toBe(screen.getByPlaceholderText("Your answer"));
+  });
+});
+
+describe("tool row summary for a denial", () => {
+  const item = { kind: "tool" as const, id: "t", name: "bash", display: "bash(rm x)", input: {}, result: "The user declined this. Do not repeat it.", isError: true, status: "done" as const };
+
+  it("says who denied instead of showing the text written for the model", () => {
+    render(<ToolCard item={{ ...item, denied: "user" }} />);
+    expect(screen.getByText("You denied this.")).toBeTruthy();
+    expect(screen.queryByText(/Do not repeat it/)).toBeNull();
+    cleanup();
+    render(<ToolCard item={{ ...item, denied: "judge" }} />);
+    expect(screen.getByText("The judge denied this.")).toBeTruthy();
+  });
+});
+
+describe("session list and titles", () => {
+  it("does not list a session with no prompts", () => {
+    const row = (id: string, prompts: number) => ({ id, when: "2026-11-21T10:00:00", title: id, prompts, calls: 0, cost: 0, current: false });
+    expect(listed([row("a", 0), row("b", 2)]).map((r) => r.id)).toEqual(["b"]);
+  });
+
+  it("shows permission titles as a question", () => {
+    expect(permissionTitle("run a command")).toBe("Run a command?");
+    expect(permissionTitle("Already a question?")).toBe("Already a question?");
+    expect(permissionTitle("call an MCP tool")).toBe("Call an MCP tool?");
   });
 });

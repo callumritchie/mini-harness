@@ -18,7 +18,9 @@ export function ToolCard({ item }: { item: ToolItem }) {
   const stats = useMemo(() => (change ? diffStats(diffRows(change.before, change.after)) : null), [change]);
   const result = item.result ?? "";
   const shown = more || result.length <= LIMIT ? result : result.slice(0, LIMIT);
-  const firstError = item.isError ? result.split("\n").find((l) => l.trim()) ?? "" : "";
+  // the result text is written for the model; the row's summary is written for the person
+  const denied = item.denied ? (item.denied === "judge" ? "The judge denied this." : "You denied this.") : "";
+  const firstError = denied || (item.isError ? result.split("\n").find((l) => l.trim()) ?? "" : "");
 
   const copy = () => {
     navigator.clipboard?.writeText(result).then(() => {
@@ -40,7 +42,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
           <path d={open ? "M6 9l6 6 6-6" : "M9 6l6 6-6 6"} />
         </svg>
       </button>
-      {firstError && !open && <div className="tool-err">{firstError}</div>}
+      {firstError && !open && <div className={`tool-err ${denied ? "denied" : ""}`}>{firstError}</div>}
       {editsFile && item.status === "done" && !item.isError && (
         <button className="link" onClick={() => patch({ rightTab: "changes", rightOpen: true, selectedChange: path })}>
           View diff

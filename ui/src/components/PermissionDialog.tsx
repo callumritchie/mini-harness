@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { permissionTitle } from "../lib/lang";
 import { useStore } from "../store";
 
 /** Wrap the server's visible markers (⟨U+202E …⟩, ⟨ESC⟩) in <mark>; the text itself is never changed. */
@@ -36,7 +37,7 @@ export function PermissionDialog() {
           </span>
           <div className="perm-titles">
             <div id="perm-eyebrow" className="eyebrow">Permission needed</div>
-            <h2 id="perm-title">{p.title}</h2>
+            <h2 id="perm-title">{permissionTitle(p.title)}</h2>
             <div id="perm-paused" className="hint">The agent is paused until you answer</div>
           </div>
           {mode && <span className={`modebadge m-${mode}`}>{mode}</span>}

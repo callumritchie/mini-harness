@@ -25,3 +25,11 @@ export function formatTokens(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
 }
+
+/** The server's permission titles are lower-case actions ("run a command"); show them as a question ("Run a command?"). */
+export function permissionTitle(title: string): string {
+  const t = title.trim();
+  if (!t) return t;
+  const cased = t[0].toUpperCase() + t.slice(1);
+  return /[?.!]$/.test(cased) ? cased : `${cased}?`;
+}
