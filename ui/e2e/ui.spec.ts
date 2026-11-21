@@ -108,6 +108,83 @@ test("the whole demo walk-through", async ({ page }) => {
   await expect(page.locator(".msg.user .bubble").first()).toHaveText("hello");
   await page.screenshot({ path: shot("06-resumed") });
 
+  // every other state the design covers (the demo keywords are listed in demo.py). Back to Ask first: the judge answers for itself here.
+  const modeButton = page.getByRole("button", { name: /Permission mode/ });
+  await modeButton.click();
+  await page.getByRole("menuitemradio", { name: /Ask/ }).click();
+  await expect(modeButton).toContainText("Ask");
+  const say = async (text: string) => { await box.fill(text); await box.press("Enter"); };
+  const idle = () => expect(page.getByRole("button", { name: "Send" })).toBeVisible(); // Send is back once the task has finished
+
+  await say("hidden");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator("pre.action mark")).toContainText("U+202E");
+  await expect(dialog.getByText(/Hidden:/)).toBeVisible();
+  await expect(dialog.getByRole("heading")).toHaveText("Run a command?");
+  await page.screenshot({ path: shot("07-permission-hidden") });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await idle();
+  await expect(page.locator(".tool-err.denied").last()).toHaveText("You denied this.");
+
+  await say("helpers");
+  await expect(page.locator(".toolgroup-head").last()).toContainText("3 subagents");
+  await idle();
+  await expect(page.locator(".toolgroup-head").last()).toContainText("3 of 3 done");
+  await page.screenshot({ path: shot("08-subagents") });
+
+  await say("fail");
+  await expect(page.locator(".tool.error .tool-err").last()).toContainText("read_file");
+  await idle();
+  await page.screenshot({ path: shot("09-tool-failed") });
+
+  await say("cut");
+  await idle();
+  await expect(page.locator(".ending.cutoff")).toBeVisible();
+  await page.screenshot({ path: shot("10-cut-off") });
+
+  await say("list the files");
+  await expect(page.locator(".tool-display", { hasText: "glob(*)" }).last()).toBeVisible();
+  await idle();
+  await page.screenshot({ path: shot("11-tool-group") });
+
+  for (const [width, name] of [[1024, "12-narrow-1024"], [700, "13-narrow-700"], [420, "14-narrow-420"]] as const) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.reload(); // a fresh load at this width: the drawers start closed, and the session comes back from the server
+    await expect(page.locator(".msg.user .bubble").first()).toHaveText("hello");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+    await page.screenshot({ path: shot(name) });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.reload();
+  await expect(page.locator(".msg.user .bubble").first()).toHaveText("hello");
+
+  await modeButton.click();
+  await page.getByRole("menuitemradio", { name: /Allow/ }).click();
+  const confirm = page.getByRole("alertdialog", { name: /Turn on Allow/ });
+  await expect(confirm).toBeVisible();
+  await expect(confirm.getByRole("button", { name: /Keep/ })).toBeFocused();
+  await page.screenshot({ path: shot("15-allow-confirm") });
+  await confirm.getByRole("button", { name: "Turn on Allow" }).click();
+  await expect(page.locator(".allow-strip")).toBeVisible();
+  await expect(page.locator(".shell.allow")).toBeVisible();
+  await page.screenshot({ path: shot("16-allow-on") });
+  await page.getByRole("button", { name: "Switch to Ask" }).click();
+  await expect(page.locator(".allow-strip")).toHaveCount(0);
+
+  // a goal: the demo model never claims it is done, so it stops at the turn limit
+  await page.getByRole("button", { name: /Start a goal/ }).click();
+  const goalForm = page.getByRole("dialog", { name: /unattended/ });
+  await expect(goalForm.getByText(/In Ask mode/)).toBeVisible();
+  await goalForm.getByLabel("Goal").fill("Make the project tidy");
+  await goalForm.getByLabel(/Turn limit/).fill("2");
+  await goalForm.getByRole("button", { name: "Start" }).click();
+  await expect(page.locator(".goalcard")).toContainText("Make the project tidy");
+  await page.screenshot({ path: shot("17-goal-running") });
+  await idle();
+  await expect(page.locator(".outcome.notdone")).toContainText("GOAL NOT DONE");
+  await page.screenshot({ path: shot("18-goal-result") });
+
   // slash commands
   await box.fill("/perm");
   await expect(page.getByRole("option", { name: /permissions/ })).toBeVisible();

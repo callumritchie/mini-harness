@@ -8,6 +8,13 @@ with no API key and no cost. It reads keywords in your last message and answers 
   ask / choose      asks you Python or Go with ask_user
   secret / .env     tries to read .env (always asks)
   long              a slow, long reply (try the Stop button)
+
+Keywords for reviewing every state (used by the screenshot test; they are not in the starter prompts):
+
+  hidden            a command with an invisible character in it (the approval dialog with a warning)
+  helpers           three subagent calls in one reply
+  fail              edit_file on a file that was not read first (an error with advice)
+  cut               a reply that stops at the maximum length
   anything else     echoes your message
 """
 import itertools
@@ -30,6 +37,9 @@ Try one of these:
 print("hello from the demo")
 ```
 """
+
+CUT = ("This reply keeps going until it reaches the maximum length, and then it stops in the middle of a sentence, which is what the "
+       "interface should show when that happens. Here is more text so that there is something to cut off, and a little more, and a lit")
 
 LONG = ("This is a deliberately slow reply so you can try the Stop button. " * 40).strip()
 
@@ -68,6 +78,16 @@ def script(messages):
             return [_text(f"You picked **{choice}**. I'd write hello world in {choice} next (the demo stops here).")], "end_turn"
         return [_text("Done. (The result is in the card above.)")], "end_turn"
     t = (text or "").lower()
+    # the review keywords come first: "hidden" contains "hi", "helpers" contains "help"
+    if "hidden" in t:
+        return [_text("I'll run a command that has an invisible character in it."), _tool("bash", command="echo safe\u202e evil")], "tool_use"
+    if "helpers" in t:
+        return [_text("I'll ask three helpers at once."), _tool("subagent", task="Summarise README.md"),
+                _tool("subagent", task="Describe the project folder"), _tool("subagent", task="Name the main file")], "tool_use"
+    if "fail" in t:
+        return [_text("I'll edit a file I have not read."), _tool("edit_file", path="README.md", old_string="Demo", new_string="Example")], "tool_use"
+    if "cut" in t:
+        return [_text(CUT)], "max_tokens"
     if any(w in t for w in ("delete", "remove", "rm ")):
         return [_text("I'll delete it with a shell command, which needs your approval."), _tool("bash", command="rm demo.py")], "tool_use"
     if any(w in t for w in ("create", "write", "make a file")):
