@@ -9,6 +9,7 @@ export function AskCard() {
   if (!ask) return null;
   return (
     <div className="ask" role="group" aria-label="Question from the agent">
+      <div className="eyebrow">The agent is waiting for your answer</div>
       <div className="ask-q">{ask.question}</div>
       {ask.choices.length > 0 && (
         <ol className="choices">

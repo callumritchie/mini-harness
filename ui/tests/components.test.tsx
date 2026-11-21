@@ -49,6 +49,14 @@ describe("PermissionDialog", () => {
     expect(screen.getByText("rm deletes files")).toBeTruthy();
   });
 
+  it("highlights hidden-character markers in the action without changing its text", () => {
+    const shown = ["bash:", "    $ echo a⟨U+202E RIGHT-TO-LEFT OVERRIDE⟩b"];
+    useStore.setState({ permission: { ...request, display: shown } });
+    const { container } = render(<PermissionDialog />);
+    expect(container.querySelector("pre.action")?.textContent).toBe(shown.join("\n"));
+    expect(container.querySelector("pre.action mark")?.textContent).toBe("⟨U+202E RIGHT-TO-LEFT OVERRIDE⟩");
+  });
+
   it("focuses Deny, and only a click on Allow approves", () => {
     const answer = vi.fn();
     useStore.setState({ permission: request, answerPermission: answer });

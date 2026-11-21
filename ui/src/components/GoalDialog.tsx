@@ -25,8 +25,13 @@ export function GoalDialog() {
         <h2 id="goal-title">Work unattended on a goal</h2>
         <p className="hint">
           It keeps working until it claims it is done with evidence; then your check runs; then a fresh read-only reviewer checks the work.
-          It cannot ask you questions{mode === "ask" ? ", and in “ask” mode risky steps still wait for you. Switch to “judge” or use --allow rules to run hands-off" : ""}.
+          It cannot ask you questions.
         </p>
+        {mode === "ask" && (
+          <div className="warnpanel" role="note">
+            In Ask mode, risky steps still wait for you, so it will not run hands-off. Switch to Judge, or use --allow rules.
+          </div>
+        )}
         <label>Goal<textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} autoFocus required /></label>
         <label>Your check (optional)<input value={verify} onChange={(e) => setVerify(e.target.value)} placeholder="python3 -m unittest -q" /></label>
         <label>Turn limit (optional)<input value={turns} onChange={(e) => setTurns(e.target.value.replace(/\D/g, ""))} placeholder="100" /></label>
