@@ -93,7 +93,9 @@ export function Composer() {
           autoFocus
         />
         {running ? (
-          <button className="stop" onClick={cancel} aria-label="Stop">■ Stop</button>
+          <button className="stop" onClick={cancel} aria-label="Stop">
+            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><rect width="10" height="10" rx="1.5" fill="currentColor" /></svg> Stop
+          </button>
         ) : (
           <button className="send" onClick={send} disabled={!text.trim() || !connected} aria-label="Send">↑</button>
         )}

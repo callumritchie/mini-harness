@@ -3,6 +3,9 @@ import { formatCost } from "../lib/lang";
 import type { SessionRow } from "../protocol";
 import { Logo } from "./Logo";
 
+const when = (iso: string, today: boolean) =>
+  today ? new Date(iso).toLocaleTimeString([], { timeStyle: "short" }) : new Date(iso).toLocaleDateString([], { dateStyle: "medium" });
+
 function groups(sessions: SessionRow[]) {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const today = sessions.filter((s) => new Date(s.when) >= start);
@@ -41,7 +44,7 @@ export function Sidebar() {
                     <li key={s.id}>
                       <button className={s.current ? "current" : ""} disabled={running} onClick={() => !s.current && resume(s.id)} title={s.title}>
                         <span className="title">{s.title.startsWith("GOAL:") && <span className="tag goal-tag">GOAL</span>}{s.title}</span>
-                        <span className="sub">{new Date(s.when).toLocaleString([], { dateStyle: "short", timeStyle: "short" })} · {s.prompts} prompt{s.prompts === 1 ? "" : "s"}{s.cost ? ` · ${formatCost(s.cost)}` : ""}</span>
+                        <span className="sub">{when(s.when, label === "Today")} · {s.prompts} prompt{s.prompts === 1 ? "" : "s"}{s.cost ? ` · ${formatCost(s.cost)}` : ""}</span>
                       </button>
                     </li>
                   ))}

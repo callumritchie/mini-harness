@@ -39,7 +39,7 @@ export function PermissionDialog() {
             <h2 id="perm-title">{p.title}</h2>
             <div id="perm-paused" className="hint">The agent is paused until you answer</div>
           </div>
-          {mode && <span className={`modebadge ${mode}`}>{mode}</span>}
+          {mode && <span className={`modebadge m-${mode}`}>{mode}</span>}
         </div>
         <pre className="action">{markHidden(p.display.join("\n"))}</pre>
         {p.findings.length > 0 && (

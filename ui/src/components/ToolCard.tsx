@@ -36,7 +36,9 @@ export function ToolCard({ item }: { item: ToolItem }) {
         <ToolIcon name={item.name} />
         <span className="tool-display">{item.display}</span>
         {stats && !item.isError && <span className="tool-outcome"><span className="add">+{stats.added}</span> <span className="del">−{stats.removed}</span></span>}
-        <span className="chev" aria-hidden>{open ? "▾" : "▸"}</span>
+        <svg className="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d={open ? "M6 9l6 6 6-6" : "M9 6l6 6-6 6"} />
+        </svg>
       </button>
       {firstError && !open && <div className="tool-err">{firstError}</div>}
       {editsFile && item.status === "done" && !item.isError && (

@@ -38,7 +38,7 @@ export function PermissionMenu() {
 
   return (
     <div className="permmenu" ref={box}>
-      <button ref={button} className={`perm ${info.permissions}`} aria-haspopup="menu" aria-expanded={open}
+      <button ref={button} className={`perm m-${info.permissions}`} aria-haspopup="menu" aria-expanded={open}
         aria-label={`Permission mode: ${LABEL[info.permissions]}`} title={info.mode_help[info.permissions]} onClick={() => setOpen(!open)}>
         <Shield /> {LABEL[info.permissions]}
       </button>
@@ -53,7 +53,7 @@ export function PermissionMenu() {
           }}>
           {info.modes.map((m, i) => (
             <button key={m} ref={(el) => { items.current[i] = el; }} role="menuitemradio" aria-checked={m === info.permissions}
-              className={`menuitem ${m}`} tabIndex={m === info.permissions ? 0 : -1}
+              className={`menuitem m-${m}`} tabIndex={m === info.permissions ? 0 : -1}
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown") { e.preventDefault(); move(i, 1); }
                 else if (e.key === "ArrowUp") { e.preventDefault(); move(i, -1); }

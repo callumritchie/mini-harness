@@ -34,9 +34,14 @@ export function ContextPanel() {
     <div className="context">
       <section className="ccard">
         <h3 className="eyebrow">Last request</h3>
-        <p className="lead">
-        {used !== null ? <>The last request used <b>{used.toLocaleString()}</b> tokens{data.window ? <> ({((used / data.window) * 100).toFixed(1)}% of the {formatTokens(data.window)} window)</> : null}.</> : "No model call yet, so these are estimates."}
-      </p>
+        {used !== null ? (
+          <>
+            <div className="bignum"><span className="num">{used.toLocaleString()}</span> <span className="unit">tokens{data.window ? ` · ${((used / data.window) * 100).toFixed(1)}% of ${formatTokens(data.window)} window` : ""}</span></div>
+            <div className="hint">{((used / data.limit) * 100).toFixed(1)}% of the {data.limit.toLocaleString()} compaction limit</div>
+          </>
+        ) : (
+          <p className="lead">No model call yet, so these are estimates.</p>
+        )}
       </section>
       <section className="ccard">
         <h3 className="eyebrow">What fills it</h3>
@@ -73,7 +78,7 @@ export function ContextPanel() {
       <section className="ccard">
         <h3 className="eyebrow">Compaction</h3>
       <div className="ctl">
-        <label>Compact at <input value={limit} onChange={(e) => setLimitText(e.target.value.replace(/\D/g, ""))} /> tokens</label>
+        <label>Compact at <input inputMode="numeric" value={limit ? Number(limit).toLocaleString() : ""} onChange={(e) => setLimitText(e.target.value.replace(/\D/g, ""))} /> tokens</label>
         <button onClick={() => Number(limit) > 0 && setLimit(Number(limit))}>Set</button>
         <button onClick={() => compact()} disabled={running}>Compact now</button>
       </div>

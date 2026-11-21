@@ -43,11 +43,13 @@ function Node({ node, depth, open, toggle, select, selected, changes, filtering 
     );
   }
   const change = changes[node.path];
+  const filePad = { paddingLeft: 8 + depth * 14 + 14 }; // lines names up with folder names, which carry a chevron
   return (
-    <button className={`node file ${selected === node.path ? "on" : ""}`} style={pad} onClick={() => !node.secret && select(node.path)}
+    <button className={`node file ${selected === node.path ? "on" : ""}`} style={filePad} onClick={() => !node.secret && select(node.path)}
       disabled={node.secret} aria-label={node.secret ? `${node.name}, Locked` : undefined} title={node.secret ? "Looks like it holds secrets: never shown" : node.path}>
-      {node.secret ? <Lock /> : "·"} <span className="nname">{node.name}</span>
+      <span className="nname">{node.name}</span>
       {change && <span className={`mark ${change.before === null ? "new" : "mod"}`}>{change.before === null ? "NEW" : "M"}</span>}
+      {node.secret && <Lock />}
     </button>
   );
 }
