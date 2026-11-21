@@ -6,7 +6,7 @@ import { AskCard } from "../src/components/AskCard";
 import { ToolCard } from "../src/components/ToolCard";
 import { DiffView } from "../src/components/DiffView";
 import { filterTree } from "../src/components/FilesPanel";
-import { listed } from "../src/components/Sidebar";
+import { listed, searchSessions } from "../src/components/Sidebar";
 import { permissionTitle } from "../src/lib/lang";
 import { ConfirmAllow } from "../src/components/ConfirmAllow";
 import type { Info } from "../src/protocol";
@@ -101,7 +101,7 @@ describe("AskCard", () => {
     useStore.setState({ ask: { id: "a", question: "Name?", choices: [] }, answerAsk: answer });
     render(<AskCard />);
     fireEvent.change(screen.getByPlaceholderText("Your answer"), { target: { value: "Ada" } });
-    fireEvent.click(screen.getByText("Send"));
+    fireEvent.click(screen.getByText("Answer"));
     fireEvent.click(screen.getByText("Skip"));
     expect(answer.mock.calls).toEqual([["Ada"], [null]]);
   });
@@ -115,7 +115,7 @@ describe("ToolCard", () => {
     expect(screen.queryByText("Created a.py")).toBeNull();
     fireEvent.click(screen.getByText("write_file(a.py, 5 chars)"));
     expect(screen.getByText("Created a.py")).toBeTruthy();
-    fireEvent.click(screen.getByText("View diff"));
+    fireEvent.click(screen.getByText("Open in Changes"));
     expect(useStore.getState().rightTab).toBe("changes");
     expect(useStore.getState().selectedChange).toBe("a.py");
   });
@@ -129,18 +129,18 @@ describe("ToolCard", () => {
     expect(screen.getByText("Could not write a.py.")).toBeTruthy();
   });
 
-  it("keeps the input behind Show input", () => {
+  it("keeps the input behind Show input JSON", () => {
     render(<ToolCard item={item} />);
     fireEvent.click(screen.getByText("write_file(a.py, 5 chars)"));
     expect(screen.queryByText(/"content"/)).toBeNull();
-    fireEvent.click(screen.getByText("Show input"));
+    fireEvent.click(screen.getByText("Show input JSON"));
     expect(screen.getByText(/"content"/)).toBeTruthy();
   });
 
   it("marks failures", () => {
     const { container } = render(<ToolCard item={{ ...item, isError: true, result: "Not run" }} />);
     expect(container.querySelector(".tool.error")).not.toBeNull();
-    expect(screen.queryByText("View diff")).toBeNull();
+    expect(screen.queryByText("Open in Changes")).toBeNull();
   });
 });
 
@@ -160,7 +160,7 @@ describe("Allow mode needs a confirmation", () => {
     const turnOn = vi.fn();
     useStore.setState({ info, confirmAllow: true, confirmAllowMode: turnOn });
     render(<ConfirmAllow />);
-    expect(document.activeElement).toBe(screen.getByText("Keep ask"));
+    expect(document.activeElement).toBe(screen.getByText("Keep Ask"));
     fireEvent.click(screen.getByText("Turn on Allow"));
     expect(turnOn).toHaveBeenCalledTimes(1);
   });
@@ -224,11 +224,11 @@ describe("tool row summary for a denial", () => {
 
   it("says who denied instead of showing the text written for the model", () => {
     render(<ToolCard item={{ ...item, denied: "user" }} />);
-    expect(screen.getByText("You denied this.")).toBeTruthy();
+    expect(screen.getByText("you denied")).toBeTruthy();
     expect(screen.queryByText(/Do not repeat it/)).toBeNull();
     cleanup();
     render(<ToolCard item={{ ...item, denied: "judge" }} />);
-    expect(screen.getByText("The judge denied this.")).toBeTruthy();
+    expect(screen.getByText("judge denied")).toBeTruthy();
   });
 });
 
@@ -242,5 +242,34 @@ describe("session list and titles", () => {
     expect(permissionTitle("run a command")).toBe("Run a command?");
     expect(permissionTitle("Already a question?")).toBe("Already a question?");
     expect(permissionTitle("call an MCP tool")).toBe("Call an MCP tool?");
+  });
+});
+
+describe("ask card number keys", () => {
+  const ask = { id: "a1", question: "Python or Go?", choices: ["Python", "Go"] };
+
+  it("pick a choice, but not while typing and not while an approval is open", () => {
+    const answer = vi.fn();
+    useStore.setState({ ask, answerAsk: answer });
+    render(<AskCard />);
+    fireEvent.keyDown(screen.getByPlaceholderText("Or type your own answer"), { key: "1" });
+    expect(answer).not.toHaveBeenCalled();
+    act(() => useStore.setState({ permission: { id: "q", title: "run a command", display: [], findings: [], reasons: [], note: null, kind: "bash" } }));
+    fireEvent.keyDown(window, { key: "2" });
+    expect(answer).not.toHaveBeenCalled();
+    act(() => useStore.setState({ permission: null }));
+    fireEvent.keyDown(window, { key: "2" });
+    expect(answer).toHaveBeenCalledWith("Go");
+    fireEvent.keyDown(window, { key: "3" });
+    expect(answer).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("session search", () => {
+  it("filters by title, ignoring case", () => {
+    const row = (id: string, title: string) => ({ id, when: "2026-11-21T10:00:00", title, prompts: 1, calls: 0, cost: 0, current: false });
+    const rows = [row("a", "Fix the tests"), row("b", "GOAL: tidy the README"), row("c", "Explore")];
+    expect(searchSessions(rows, "readme").map((r) => r.id)).toEqual(["b"]);
+    expect(searchSessions(rows, "  ").map((r) => r.id)).toEqual(["a", "b", "c"]);
   });
 });

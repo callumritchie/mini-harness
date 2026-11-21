@@ -1,11 +1,17 @@
 import { useEffect, useRef } from "react";
 import { permissionTitle } from "../lib/lang";
+import type { Mode } from "../protocol";
 import { useStore } from "../store";
+import { Icon, type IconName } from "./Icon";
 
 /** Wrap the server's visible markers (⟨U+202E …⟩, ⟨ESC⟩) in <mark>; the text itself is never changed. */
 function markHidden(text: string) {
   return text.split(/(⟨[^⟩]*⟩)/).map((part, i) => (i % 2 ? <mark key={i}>{part}</mark> : part));
 }
+
+const KIND_ICON: Record<string, IconName> = { bash: "terminal", write: "file", read: "file", mcp: "plug" };
+export const MODE_ICON: Record<Mode, IconName> = { ask: "shield", judge: "shield-judge", allow: "shield-x" };
+const MODE_LABEL: Record<Mode, string> = { ask: "Ask", judge: "Judge", allow: "Allow" };
 
 /** The yes/no question before anything risky. It shows the exact action (hidden characters already made visible by the server).
  *  Deny is focused, Escape denies, and only a click on Allow approves: Enter on the page cannot. */
@@ -26,50 +32,54 @@ export function PermissionDialog() {
   }, [p, answer]);
 
   if (!p) return null;
+  const hidden = p.findings.length > 0;
+  const title = permissionTitle(p.title);
+  const subtitle = p.kind === "mcp" ? "From an MCP server: what it does is that server's business"
+    : mode === "judge" && p.note ? "The judge passed this to you" : "The agent is paused until you answer";
   return (
     <div className="overlay">
-      <div className="dialog perm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="perm-eyebrow perm-title" aria-describedby="perm-paused">
-        <div className="perm-head">
-          <span className="tile">
-            <svg className="shield" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M12 3l8 3v6c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6l8-3z" /><path d="M12 8v5M12 16v.01" />
-            </svg>
-          </span>
-          <div className="perm-titles">
-            <div id="perm-eyebrow" className="eyebrow">Permission needed</div>
-            <h2 id="perm-title">{permissionTitle(p.title)}</h2>
-            <div id="perm-paused" className="hint">The agent is paused until you answer</div>
+      <div className={`dialog perm-dialog ${hidden ? "has-findings" : ""}`} role="alertdialog" aria-modal="true" aria-label={`Permission needed: ${title}`} aria-describedby="perm-paused">
+        <div className="dhead">
+          <span className={`tile ${hidden ? "warn" : ""}`}><Icon name={hidden ? "warning" : KIND_ICON[p.kind] ?? "shield"} size={16} /></span>
+          <div className="dtitles">
+            <h2 id="perm-title">{title}</h2>
+            <div id="perm-paused" className="dsub">{subtitle}</div>
           </div>
-          {mode && <span className={`modebadge m-${mode}`}>{mode}</span>}
+          {mode && <span className={`modebadge m-${mode}`}><Icon name={MODE_ICON[mode]} size={11} />{MODE_LABEL[mode]}</span>}
         </div>
-        <pre className="action">{markHidden(p.display.join("\n"))}</pre>
-        {p.findings.length > 0 && (
-          <ul className="findings">
-            {p.findings.map((f, i) => (
-              <li key={i}>⚠ Hidden: {f}</li>
-            ))}
-          </ul>
-        )}
-        {p.reasons.length > 0 && (
-          <div className="why">
-            <div className="eyebrow">Why you're being asked</div>
-            <ul className="reasons">
-              {p.reasons.map((r, i) => (
-                <li key={i}>{r}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {p.note && (
-          <blockquote className="note">
-            <div className="eyebrow">{mode === "judge" ? "The judge says" : "Note"}</div>
-            {p.note}
-          </blockquote>
-        )}
-        <div className="buttons">
-          <span className="keyhint"><kbd>Esc</kbd> or <kbd>Enter</kbd> denies</span>
-          <button ref={deny} className="deny" onClick={() => answer(false)}>Deny</button>
-          <button className="allow" onClick={() => answer(true)}>Allow</button>
+        <div className="dbody">
+          <pre className="action">{markHidden(p.display.join("\n"))}</pre>
+          {hidden && (
+            <div className="findings">
+              <div className="ftitle">Hidden characters found</div>
+              <ul>
+                {p.findings.map((f, i) => (
+                  <li key={i}>Hidden: {f}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {p.note && (
+            <figure className="note">
+              <Icon name="shield-judge" />
+              <figcaption>{mode === "judge" && <strong>Judge: </strong>}{p.note}</figcaption>
+            </figure>
+          )}
+          {p.reasons.length > 0 && (
+            <div className="why">
+              <div className="eyebrow">Why you're being asked</div>
+              <ul className="reasons">
+                {p.reasons.map((r, i) => (
+                  <li key={i}>{r}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+        <div className="dfoot">
+          <span className="keyhint">Esc or Enter denies</span>
+          <button ref={deny} id="perm-deny" className="btn deny" onClick={() => answer(false)}>Deny</button>
+          <button className="btn btn-ghost allow" onClick={() => answer(true)}>Allow</button>
         </div>
       </div>
     </div>

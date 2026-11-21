@@ -56,8 +56,9 @@ export function Composer() {
     <div className="composer">
       {allow && (
         <div className="allow-strip" role="status">
-          <span><b>Allow is on:</b> nothing is asked. Commands run as you.</span>
-          <button onClick={() => setMode("ask")}>Switch to Ask</button>
+          <Icon name="shield-x" size={16} />
+          <span>Allow is on: nothing is asked. Commands run as you.</span>
+          <button className="btn btn-sm" onClick={() => setMode("ask")}>Switch to Ask</button>
         </div>
       )}
       {matches.length > 0 && (

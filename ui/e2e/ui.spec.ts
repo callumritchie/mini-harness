@@ -125,12 +125,12 @@ test("the whole demo walk-through", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await idle();
-  await expect(page.locator(".tool-err.denied").last()).toHaveText("You denied this.");
+  await expect(page.locator(".tool.denied .chip").last()).toHaveText("you denied");
 
   await say("helpers");
   await expect(page.locator(".toolgroup-head").last()).toContainText("3 subagents");
   await idle();
-  await expect(page.locator(".toolgroup-head").last()).toContainText("3 of 3 done");
+  await expect(page.locator(".toolgroup-head").last()).toContainText("3 / 3 done");
   await page.screenshot({ path: shot("08-subagents") });
 
   await say("fail");
