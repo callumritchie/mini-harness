@@ -73,7 +73,7 @@ servers unless you name them with `--pass-env NAME`.
 
 ```sh
 pip install -e ".[dev]"
-python tests/test_loop.py && python tests/test_server.py     # no API key needed
+python tests/test_loop.py && python tests/test_tools.py && python tests/test_server.py     # no API key needed
 cd ui && npm test && npm run e2e                              # unit tests, then a real browser against the demo model
 ```
 

@@ -5,6 +5,7 @@ Thanks for looking. The project is small on purpose; `DESIGN.md` explains how it
 ```sh
 pip install -e ".[dev]"          # the agent + web server + test libraries
 python tests/test_loop.py        # the engine, with fake models: no API key, no network
+python tests/test_tools.py       # tool names, manuals, input rules and error messages
 python tests/test_server.py      # the web server, with the scripted demo model
 
 cd ui

@@ -19,6 +19,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
       - run: python tests/test_loop.py
+      - run: python tests/test_tools.py
       - run: python tests/test_server.py
 
   ui:

@@ -16,7 +16,7 @@ records how it works and every decision. Update it whenever we make a decision.
 | `goal.py` | goal mode |
 | `skills.py`, `mcp.py` | skills and MCP servers in Claude Code's formats |
 | `pricing.py` | the price list and what a call costs |
-| `tests/` | `test_loop.py` (offline, fake clients), `mcp_demo_server.py` |
+| `tests/` | `test_loop.py` (offline, fake clients), `test_tools.py` (tool names, manuals, input rules, errors), `mcp_demo_server.py` |
 
 ## How to run
 

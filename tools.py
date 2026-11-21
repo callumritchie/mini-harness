@@ -68,72 +68,79 @@ def _spec(name, manual, properties, required=()):
     }
 
 
-# The manuals. Each one says: what it does, when to use it, when not to, the input rules, and what happens on failure.
+# The manuals. Every description follows the same shape: what the tool does, when to use it, when NOT to (naming the
+# better tool), its limits and side effects, and what a failure looks like. The numbers come from the constants above so
+# the manual can never disagree with the code. Input details live in each input's own description, not repeated here.
 TOOLS = [
     _spec(
         "read_file",
-        "Read a text file. Returns its lines, each prefixed with a line number and a tab "
-        "(`    12\\t<text>`). The prefix is not part of the file: leave it out when you copy text into edit_file.\n"
-        "Use it to look at a file before changing it. edit_file, and write_file on an existing file, are refused "
-        "until you have read the file in this conversation.\n"
-        "Do not use it on directories (use glob) or binary files, and do not use bash cat/head/tail to read files.\n"
-        "Long files come back in pieces of up to 2000 lines; the result tells you which offset to use for the next piece.\n"
-        "On failure (missing file, directory, binary file) the error tells you which tool to use instead.",
+        "Read a UTF-8 text file and return its lines, each prefixed with a line number and a tab (`    12\\t<text>`). "
+        "The prefix is not part of the file: leave it out when you copy text into edit_file.\n"
+        "Use it to look at a file before changing it: edit_file, and write_file on an existing file, are refused until "
+        "you have read the file in this conversation, and again if it changed on disk since.\n"
+        "Do not use it on directories (use glob to list them) or on binary files, and do not use bash cat, head or tail "
+        "to read files.\n"
+        f"A call returns at most {READ_LIMIT} lines, and lines over {MAX_LINE_CHARS} characters are cut; when there is more, the "
+        "result ends with the offset to use for the next piece.\n"
+        "On failure (missing file, directory, binary file, offset past the end) the error says which tool or value to use instead.",
         {
-            "path": _str("File to read, absolute or relative to the working directory.", minLength=1),
-            "offset": _int("First line to read, counting from 1. Default 1.", minimum=1),
-            "limit": _int("Number of lines to read, 1-2000. Default 2000.", minimum=1, maximum=READ_LIMIT),
+            "path": _str("File to read: absolute, or relative to the working directory. Example: `src/app.py`.", minLength=1),
+            "offset": _int("Line to start from, counting from 1. Use it to continue a long file. Default 1.", minimum=1),
+            "limit": _int(f"How many lines to return, 1-{READ_LIMIT}. Default {READ_LIMIT}.", minimum=1, maximum=READ_LIMIT),
         },
         ["path"],
     ),
     _spec(
         "write_file",
-        "Create a new file, or replace an existing file completely, with the given content. Missing parent "
+        "Create a new file, or replace an existing file completely, with the content you give. Missing parent "
         "directories are created.\n"
         "Use it for new files and full rewrites. For a change to part of an existing file use edit_file instead: it is "
-        "safer and sends less text.\n"
-        "To overwrite an existing file you must have read it first in this conversation; the error says so if you have not.\n"
-        "Inputs: path (required), content (required, the complete new file text; may be empty).",
+        "safer and sends less text. Everything in an overwritten file that is not in `content` is lost.\n"
+        "To overwrite an existing file you must have read it with read_file first in this conversation; the error says so "
+        "if you have not. Writes outside the project, and to files that run code later, are shown to the user for approval; "
+        "a refusal comes back as an error, and you must not look for another way to do the same thing.\n"
+        "On success it reports whether the file was created or overwritten, and how many lines it now has.",
         {
-            "path": _str("File to create or overwrite.", minLength=1),
-            "content": _str("The complete new content of the file."),
+            "path": _str("File to create or overwrite: absolute, or relative to the working directory. Example: `src/new_module.py`.", minLength=1),
+            "content": _str("The complete new text of the file, exactly as it should be on disk. May be empty."),
         },
         ["path", "content"],
     ),
     _spec(
         "edit_file",
-        "Replace exact text in an existing file.\n"
-        "Rules: the file must have been read with read_file in this conversation, and must not have changed since. "
+        "Replace exact text in an existing file, leaving the rest of it untouched.\n"
+        "Use it for any change to part of a file. To create a file or rewrite one completely use write_file; to rename "
+        "something everywhere in one file set replace_all.\n"
+        "Rules: the file must have been read with read_file in this conversation and must not have changed since. "
         "old_string must match the file exactly, including spaces, tabs, indentation and line breaks, and must be unique "
-        "in the file: include enough surrounding lines to make it unique, or set replace_all to true to change every "
-        "occurrence. old_string and new_string must differ. Never include the read_file line-number prefix.\n"
-        "To create a file use write_file. To rename something everywhere in one file use replace_all.\n"
-        "On failure the error says which rule was broken and what to do (for a missing old_string it shows the closest "
-        "line in the file).",
+        "in the file unless replace_all is true: include enough surrounding lines to make it unique. old_string and "
+        "new_string must differ. Never include the read_file line-number prefix.\n"
+        "On success it reports how many occurrences were replaced. On failure the error says which rule was broken and what "
+        "to do (for a missing old_string it shows the closest line in the file; for an ambiguous one, the line numbers).",
         {
-            "path": _str("File to edit.", minLength=1),
-            "old_string": _str("Exact text to replace. Must be non-empty.", minLength=1),
-            "new_string": _str("Replacement text. May be empty to delete old_string."),
-            "replace_all": _bool("Replace every occurrence instead of requiring a unique match. Default false."),
+            "path": _str("File to edit: absolute, or relative to the working directory. It must already exist.", minLength=1),
+            "old_string": _str("The exact text to replace, copied from the file without line-number prefixes. Must be non-empty.", minLength=1),
+            "new_string": _str("The text to put in its place. May be empty, which deletes old_string."),
+            "replace_all": _bool("Replace every occurrence of old_string instead of requiring exactly one. Default false."),
         },
         ["path", "old_string", "new_string"],
     ),
     _spec(
         "bash",
         "Run a shell command in the working directory and return its exit code, stdout and stderr.\n"
-        "Use it to run programs, tests and scripts, and for git or package tools. Do not use it to read, search or edit "
-        "files, and do not use grep, find, rg, cat or ls -R through it: read_file, grep, glob and edit_file do that, and "
-        "they need no approval inside the project. Commands that could change things are shown to the user for approval; "
-        "a refusal comes back as an error, and you must not look for another way to do the same thing.\n"
-        "Each call starts a fresh shell: `cd` and environment variables do not carry over, and nothing can read from "
-        "stdin. Output over 30,000 characters is cut. A non-zero exit code is reported as an error together with the "
-        "output so you can fix the cause.\n"
-        f"Inputs: command (required), timeout_seconds (optional, 1-{MAX_BASH_TIMEOUT}, default {DEFAULT_BASH_TIMEOUT}). "
-        "A command that runs out of time is killed; the error suggests what to do.",
+        "Use it to run programs, tests, builds and scripts, and for git or package tools. Do not use it to read, search or "
+        "edit files, and do not use grep, find, rg, cat or ls -R through it: read_file, grep, glob and edit_file do that, and "
+        "they need no approval inside the project.\n"
+        "Commands that could change things are shown to the user for approval; a refusal comes back as an error, and you "
+        "must not look for another way to do the same thing.\n"
+        "Each call starts a fresh shell: `cd` and environment variables do not carry over (chain with `&&` or use full "
+        "paths), and nothing can read from stdin, so never run a command that waits for input. "
+        f"Output over {MAX_TOOL_OUTPUT:,} characters is cut. A non-zero exit code comes back as an error together with the "
+        "output so you can fix the cause. A command that runs past its timeout is killed and the error suggests what to do.",
         {
-            "command": _str("The shell command to run.", minLength=1),
+            "command": _str("The shell command to run, exactly as you would type it. Example: `python -m pytest -q`.", minLength=1),
             "timeout_seconds": _int(
-                f"Kill the command after this many seconds. Default {DEFAULT_BASH_TIMEOUT}.",
+                f"Kill the command after this many seconds, 1-{MAX_BASH_TIMEOUT}. Default {DEFAULT_BASH_TIMEOUT}.",
                 minimum=1, maximum=MAX_BASH_TIMEOUT,
             ),
         },
@@ -141,56 +148,51 @@ TOOLS = [
     ),
     _spec(
         "glob",
-        "Find files by name pattern, e.g. `**/*.py` or `src/**/test_*.py`. Returns up to 200 paths, newest first. "
-        "Skips .git, __pycache__, node_modules and virtualenvs. Free inside the project (no approval needed).\n"
-        "Use it to find files or list a directory (`*`), not `ls` or `find` through bash. To search inside files use grep.\n"
-        "Inputs: pattern (required, relative, no leading /), path (optional directory to search from, default the "
-        "working directory). No matches is not an error; the result suggests how to widen the search. A search is "
-        f"stopped after {SEARCH_SECONDS} seconds or {MAX_GLOB_COLLECT} files; the result then says so, and you should narrow "
-        "the pattern or path and search again.",
+        f"Find files by name pattern and return their paths, newest first, up to {MAX_MATCHES}. Directories are not listed, "
+        "only files; .git, __pycache__, node_modules and virtualenvs are skipped. It is free inside the project (no approval "
+        "needed).\n"
+        "Use it to find a file by name, or to list a directory with pattern `*`. Do not use `ls` or `find` through bash, and "
+        "to search inside files use grep instead.\n"
+        f"A search is stopped after {SEARCH_SECONDS} seconds or {MAX_GLOB_COLLECT} files; the result then says so, and you should "
+        "narrow the pattern or path and search again. No matches is not an error: the result suggests how to widen the search.",
         {
-            "pattern": _str("Glob pattern, relative to path.", minLength=1),
-            "path": _str("Directory to search from. Default: working directory.", minLength=1),
+            "pattern": _str("Glob pattern relative to path, with no leading `/`. Examples: `**/*.py`, `src/**/test_*.py`, `*`.", minLength=1),
+            "path": _str("Directory to search from, absolute or relative to the working directory. Default: the working directory.", minLength=1),
         },
         ["pattern"],
     ),
     _spec(
         "grep",
-        "Search file contents with a regular expression (Python `re` syntax). Returns up to 200 matches as "
-        "`path:line:text`. Skips .git, __pycache__, node_modules, virtualenvs and binary or very large files. Free "
-        "inside the project (no approval needed). It never looks inside files that look like they hold secrets (.env, "
-        "keys, credentials): they are skipped and reported by name, so a search can never show their contents.\n"
-        "Use it to find where something is defined or used. Search with this tool, not with grep, rg or find through "
-        "bash. To find files by name use glob; to see a whole file use read_file.\n"
-        f"A search is stopped after {MAX_MATCHES} matches, {SEARCH_SECONDS} seconds or {MAX_SEARCH_FILES} files; the result "
-        "then says it is partial and you must narrow it (a more specific pattern, a subfolder as path, or a glob filter) "
-        "and search again.\n"
-        "Inputs: pattern (required), path (optional file or directory, default the working directory), glob (optional "
-        "filename filter such as `*.py`), case_insensitive (optional boolean). Escape regex special characters such as "
-        "`(` `.` `[` with a backslash to match them literally. An invalid pattern or no matches comes back with a "
-        "suggestion for what to change.",
+        "Search file contents with a regular expression (Python `re` syntax), line by line, and return matches as "
+        f"`path:line:text`, up to {MAX_MATCHES}. .git, __pycache__, node_modules, virtualenvs, binary files and very large "
+        "files are skipped. It is free inside the project (no approval needed). It never looks inside files that look like "
+        "they hold secrets (.env, keys, credentials): they are skipped and reported by name, so a search can never show their contents.\n"
+        "Use it to find where something is defined or used. Do not use grep, rg or find through bash. To find files by name use "
+        "glob; to see a whole file use read_file.\n"
+        f"A search is stopped after {MAX_MATCHES} matches, {SEARCH_SECONDS} seconds or {MAX_SEARCH_FILES} files; the result then says it "
+        "is partial and you must narrow it (a more specific pattern, a subfolder as path, or a glob filter) and search again. "
+        "An invalid pattern or no matches comes back with a suggestion for what to change.",
         {
-            "pattern": _str("Regular expression to search for.", minLength=1),
-            "path": _str("File or directory to search. Default: working directory.", minLength=1),
-            "glob": _str("Only search files whose name matches this pattern, e.g. `*.py`.", minLength=1),
-            "case_insensitive": _bool("Ignore case. Default false."),
+            "pattern": _str("Regular expression to find. Escape special characters such as `(` `.` `[` with a backslash to match them literally. Example: `def \\w+\\(`.", minLength=1),
+            "path": _str("File or directory to search, absolute or relative to the working directory. Default: the working directory.", minLength=1),
+            "glob": _str("Only search files whose name matches this pattern. Example: `*.py`.", minLength=1),
+            "case_insensitive": _bool("Ignore upper/lower case when matching. Default false."),
         },
         ["pattern"],
     ),
-]
-TOOLS += [
     _spec(
         "ask_user",
-        "Ask the user one question and get their answer back. Use it only when a missing detail really changes the work and "
-        "you cannot find it yourself or assume it sensibly: a choice between approaches, a name, a preference. One "
-        "question per call. When there are a few clear options pass them as `choices` (up to 10): the user sees a numbered "
-        "list and may still type their own answer. Do not use it to ask permission for things (the permission system does "
-        "that), to ask for things you can look up with your tools, or to chat.\n"
+        "Ask the user one question and get their answer back.\n"
+        "Use it only when a missing detail really changes the work and you cannot find it yourself or assume it sensibly: a "
+        "choice between approaches, a name, a preference. Ask one question per call. When there are a few clear options pass "
+        "them as `choices`: the user sees a numbered list and may still type their own answer.\n"
+        "Do not use it to ask permission for things (the permission system does that), to ask for things you can look up with "
+        "your tools, or to chat.\n"
         "If nobody can answer (a headless or unattended run) the result says so: then choose the most reasonable option, "
         "carry on, and say clearly in your final answer that you assumed it and what you assumed.",
         {
-            "question": _str("The question, one clear sentence.", minLength=1, maxLength=500),
-            "choices": _list("Optional answers to offer, shortest first.", maxItems=10),
+            "question": _str("The question, one clear self-contained sentence of at most 500 characters.", minLength=1, maxLength=500),
+            "choices": _list("Optional answers to offer, at most 10, shortest first. Leave out for an open question.", maxItems=10),
         },
         ["question"],
     ),
@@ -199,13 +201,14 @@ TOOLS += [
         "Run a helper on a task in a fresh, empty conversation and get back only its final answer. The helper has "
         "read_file, glob and grep only: it can look, count, search and report, and it cannot write, edit, run commands or "
         "ask the user. A request to change something is refused.\n"
+        "Use it for research that would fill this conversation with reading (surveying many files, counting, checking a "
+        "claim), and for a second opinion. Do not use it for work that changes anything, or for a lookup one grep or "
+        "read_file would answer.\n"
         "The helper cannot see this conversation, so the task must carry everything it needs: every file path, every "
         "fact, name and number, what to look for, and what form the answer should take (for example 'reply with just the "
-        "number'). Vague tasks give vague answers.\n"
-        "Use it for research that would fill this conversation with reading (surveying many files, counting, checking a "
-        "claim), and for a second opinion. Do not use it for work that changes anything. Several subagent calls in one "
-        "reply may run at the same time, so each must stand on its own.",
-        {"task": _str("The complete task, with every path and fact the helper needs.", minLength=1)},
+        "number'). Vague tasks give vague answers. Its answer is cut at "
+        f"{SUBAGENT_RESULT_CHARS:,} characters. Several subagent calls in one reply may run at the same time, so each must stand on its own.",
+        {"task": _str("The complete task, self-contained: every path and fact the helper needs, and the form of answer you want.", minLength=1)},
         ["task"],
     ),
 ]
