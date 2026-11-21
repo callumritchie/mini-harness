@@ -96,7 +96,7 @@ export default function App() {
       <div className={allow ? "shell allow" : "shell"}>
         <main className="main">
           <TopBar />
-          {!connected && <div className="banner">Disconnected from the server. Reconnecting…</div>}
+          {!connected && <div className="banner" role="status"><span className="spinner" aria-hidden /> Disconnected from the server. Reconnecting…</div>}
           <Chat />
           <Composer />
         </main>

@@ -15,7 +15,7 @@ export type Item =
       isError: boolean;
       status: "running" | "done";
     }
-  | { kind: "notice"; id: string; text: string }
+  | { kind: "notice"; id: string; text: string; tone?: "stopped" | "unfinished" | "cutoff" }
   | { kind: "summary"; id: string; text: string }
   | { kind: "error"; id: string; text: string };
 
@@ -177,12 +177,12 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       };
     case "done": {
       let items: Item[] = finishStreaming(s.items).map((i) => (i.kind === "tool" && i.status === "running" ? { ...i, status: "done" } : i));
-      const note = (text: string): Item => ({ kind: "notice", id: nextId("n"), text });
+      const note = (text: string, tone?: "stopped" | "unfinished" | "cutoff"): Item => ({ kind: "notice", id: nextId("n"), text, tone });
       if (ev.error) items = [...items, { kind: "error", id: nextId("e"), text: ev.error }];
-      else if (ev.interrupted) items = [...items, note("Stopped. That turn was dropped from the conversation.")];
+      else if (ev.interrupted) items = [...items, note("Stopped. That turn was dropped from the conversation.", "stopped")];
       else if (ev.text.startsWith("GOAL")) items = [...items, { kind: "assistant", id: nextId("a"), text: ev.text, streaming: false }];
-      else if (ev.stopped) items = [...items, note(`Not finished: ${ev.stopped}`)];
-      else if (ev.cut_off) items = [...items, note("The reply was cut off at the maximum length.")];
+      else if (ev.stopped) items = [...items, note(`Not finished: ${ev.stopped}`, "unfinished")];
+      else if (ev.cut_off) items = [...items, note("The reply was cut off at the maximum length.", "cutoff")];
       return { ...s, items, running: false, info: ev.info, totalCost: ev.info.cost, permission: null, ask: null };
     }
     case "session_loaded":

@@ -16,12 +16,13 @@ export function Welcome() {
   return (
     <div className="welcome">
       <Logo size={36} />
+      {info && <div className="where-title" title={info.project}>{info.project.split("/").pop()}</div>}
       <h1>What should we work on?</h1>
       <p className="where">
         {info ? <>Working in <code title={info.project}>{info.project.split("/").pop()}</code> with <b>{info.model}</b>.</> : "Connecting…"}
         {demo && " This is the demo: a scripted model, nothing is real. Try “hello”, “create a file”, then “delete it”."}
       </p>
-      {info && !info.client_ready && <div className="error-line">{info.client_error ?? "No API key yet."}</div>}
+      {info && !info.client_ready && <div className="warnpanel" role="alert">{info.client_error ?? "No API key yet."}</div>}
       <div className="starters">
         {STARTERS.map((s) => (
           <button key={s.title} className="starter" onClick={() => patch({ draft: s.text })}>

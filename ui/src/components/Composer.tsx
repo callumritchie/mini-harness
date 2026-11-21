@@ -23,6 +23,7 @@ export function Composer() {
   const cancel = useStore((s) => s.cancel);
   const draft = useStore((s) => s.draft);
   const patch = useStore((s) => s.patch);
+  const info = useStore((s) => s.info);
   const allow = useStore((s) => s.info?.permissions === "allow");
   const setMode = useStore((s) => s.setMode);
 
@@ -73,7 +74,7 @@ export function Composer() {
           id="composer"
           value={text}
           rows={1}
-          placeholder={connected ? (running ? "Working… press Stop to interrupt" : "Message Mini Harness, or / for commands") : "Connecting…"}
+          placeholder={connected ? (running ? "Working… press Stop to interrupt" : "Message Mini Harness, or / for commands") : info ? "Can't send while disconnected" : "Connecting…"}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (matches.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
