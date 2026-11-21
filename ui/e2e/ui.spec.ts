@@ -182,8 +182,13 @@ test("the whole demo walk-through", async ({ page }) => {
   await expect(page.locator(".goalcard")).toContainText("Make the project tidy");
   await page.screenshot({ path: shot("17-goal-running") });
   await idle();
-  await expect(page.locator(".outcome.notdone")).toContainText("GOAL NOT DONE");
+  const outcome = page.locator(".outcome.notdone");
+  await expect(outcome).toContainText("Goal not done");
+  await expect(outcome).toContainText("2 rounds");
+  await expect(outcome.getByRole("button", { name: "Run goal again" })).toBeEnabled();
   await page.screenshot({ path: shot("18-goal-result") });
+  await outcome.getByRole("button", { name: "Show all rounds" }).click();
+  await expect(outcome.locator(".rounds li").first()).toContainText("Goal round 1");
 
   // slash commands
   await box.fill("/perm");

@@ -2,9 +2,21 @@ import { create } from "zustand";
 import type { ClientRequest, CostSummary, Info, Mode, ServerEvent, SessionRow, TranscriptItem, Usage } from "./protocol";
 import type { Socket } from "./socket";
 
+/** What the page remembers about a goal it started: enough to run it again and to say what it cost. */
+export interface GoalRun {
+  text: string;
+  verify?: string;
+  maxTurns?: number;
+  costAtStart: number | null;
+}
+export interface GoalResult extends Omit<GoalRun, "costAtStart"> {
+  cost: number | null; // what this goal added to the session total, when both ends are known
+  complete: boolean;
+}
+
 export type Item =
   | { kind: "user"; id: string; text: string }
-  | { kind: "assistant"; id: string; text: string; streaming: boolean }
+  | { kind: "assistant"; id: string; text: string; streaming: boolean; goal?: GoalResult }
   | {
       kind: "tool";
       id: string;
@@ -61,6 +73,7 @@ export interface ChatState {
   /** a denial whose tool result has not arrived yet; until the server sends tool ids, the next error result is taken to be that call */
   denial: "user" | "judge" | null;
   draft: string | null; // text a starter button wants put in the message box
+  goalRun: GoalRun | null; // the goal started from this page, until its result arrives
 }
 
 let counter = 0;
@@ -87,6 +100,7 @@ export const initialState: ChatState = {
   confirmAllow: false,
   denial: null,
   draft: null,
+  goalRun: null,
 };
 
 /** One line describing a tool call, like the terminal's activity line. */
@@ -188,10 +202,18 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       const note = (text: string, tone?: "stopped" | "unfinished" | "cutoff"): Item => ({ kind: "notice", id: nextId("n"), text, tone });
       if (ev.error) items = [...items, { kind: "error", id: nextId("e"), text: ev.error }];
       else if (ev.interrupted) items = [...items, note("Stopped. That turn was dropped from the conversation.", "stopped")];
-      else if (ev.text.startsWith("GOAL")) items = [...items, { kind: "assistant", id: nextId("a"), text: ev.text, streaming: false }];
+      else if (ev.text.startsWith("GOAL")) {
+        const run = s.goalRun;
+        const end = ev.info.cost.usd;
+        const goal: GoalResult | undefined = run ? {
+          text: run.text, verify: run.verify, maxTurns: run.maxTurns,
+          cost: run.costAtStart !== null && end !== null ? Math.max(0, end - run.costAtStart) : null, complete: ev.info.cost.complete,
+        } : undefined;
+        items = [...items, { kind: "assistant", id: nextId("a"), text: ev.text, streaming: false, ...(goal ? { goal } : {}) }];
+      }
       else if (ev.stopped) items = [...items, note(`Not finished: ${ev.stopped}`, "unfinished")];
-      else if (ev.cut_off) items = [...items, note("The reply was cut off at the maximum length.", "cutoff")];
-      return { ...s, items, running: false, info: ev.info, totalCost: ev.info.cost, permission: null, ask: null, denial: null };
+      else if (ev.cut_off) items = [...items, note("Cut off. The reply hit its maximum length.", "cutoff")];
+      return { ...s, items, running: false, info: ev.info, totalCost: ev.info.cost, permission: null, ask: null, denial: null, goalRun: null };
     }
     case "session_loaded":
       return {
@@ -327,7 +349,11 @@ export const useStore = create<ChatState & Actions>((set, get) => {
     compact: (focus) => void request({ type: "compact", focus }),
     goal(text, verify, maxTurns) {
       if (request({ type: "goal", text, verify, max_turns: maxTurns })) {
-        set((s) => ({ items: [...s.items, { kind: "user", id: nextId("u"), text: `/goal ${text}${verify ? `  (check: ${verify})` : ""}` }], showGoal: false }));
+        set((s) => ({
+          items: [...s.items, { kind: "user", id: nextId("u"), text: `/goal ${text}${verify ? `  (check: ${verify})` : ""}` }],
+          showGoal: false,
+          goalRun: { text, verify, maxTurns, costAtStart: s.totalCost?.usd ?? null },
+        }));
       }
     },
   };

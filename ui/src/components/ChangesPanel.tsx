@@ -13,19 +13,33 @@ export function ChangesPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [changes],
   );
-  if (paths.length === 0) return <div className="empty-panel">Files the agent writes or edits in this session appear here, with a diff.<br /><span className="muted">A resumed session starts empty: changes from before it was loaded are not restored.</span></div>;
+  if (paths.length === 0) {
+    return (
+      <div className="cant-wrap">
+        <div className="empty-card">
+          <div className="cant-title">No changes yet in this session</div>
+          <div className="cant-body">
+            Files the agent writes or edits will appear here with a diff. Changes made before you resumed this session, or by shell commands, aren't tracked.
+          </div>
+        </div>
+      </div>
+    );
+  }
   const current = selected && changes[selected] ? selected : paths[0];
   return (
     <div className="changes">
       <ul className="change-list">
-        {paths.map((p) => (
-          <li key={p}>
-            <button className={p === current ? "on" : ""} onClick={() => patch({ selectedChange: p })}>
-              <span className="name">{p}</span>
-              <span className="add">+{stats[p].added}</span> <span className="del">−{stats[p].removed}</span>
-            </button>
-          </li>
-        ))}
+        {paths.map((p) => {
+          const isNew = changes[p].before === null;
+          return (
+            <li key={p}>
+              <button className={p === current ? "is-selected" : ""} onClick={() => patch({ selectedChange: p })}>
+                <span className="name">{p}{isNew && <span className="mark new">NEW</span>}</span>
+                <span className="add">+{stats[p].added}</span>{!isNew && <span className="del">−{stats[p].removed}</span>}
+              </button>
+            </li>
+          );
+        })}
       </ul>
       <DiffView path={current} before={changes[current].before} after={changes[current].after} />
     </div>

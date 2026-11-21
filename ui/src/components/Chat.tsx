@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { groupItems, type Entry } from "../lib/group";
 import { compactingId } from "../lib/notice";
+import { goalSpans } from "../lib/goal";
 import { useStore } from "../store";
 import { AskCard } from "./AskCard";
 import { GoalCard } from "./GoalCard";
@@ -27,7 +28,9 @@ export function Chat() {
   const permission = useStore((s) => s.permission);
   const box = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
-  const entries = useMemo(() => groupItems(items), [items]);
+  const spans = useMemo(() => goalSpans(items, running), [items, running]);
+  // goal-progress notices live in the goal card while it runs and in its result card after; the thread keeps the rest
+  const entries = useMemo(() => groupItems(items.filter((it) => !spans.hidden.has(it.id))), [items, spans]);
   const compacting = useMemo(() => compactingId(items), [items]);
 
   useEffect(() => {
@@ -54,7 +57,7 @@ export function Chat() {
             <Message key={e.id} item={e} />
           ) : (
             <AgentRow key={e.id} first={isUser(entries[i - 1])}>
-              {e.kind === "group" ? <ToolGroup tools={e.tools} /> : <Message item={e} compacting={e.id === compacting} />}
+              {e.kind === "group" ? <ToolGroup tools={e.tools} /> : <Message item={e} compacting={e.id === compacting} span={spans.byOutcome.get(e.id)} />}
             </AgentRow>
           ),
         )}
