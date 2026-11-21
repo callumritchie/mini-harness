@@ -31,6 +31,11 @@ describe("goalSummary", () => {
     expect(goalSummary(goal, true)).toEqual({ text: "fix it", round: 2, check: "check `pytest`: FAILED (exit 1)", reviewer: "reviewer (fresh, read-only, trusts nothing) is checking..." });
   });
 
+  it("starts from the /goal message when the server sends no goal: notice, and drops the check suffix from the text", () => {
+    const items = [user("u", "/goal fix it  (check: pytest)"), n("3", "goal round 2: working...")];
+    expect(goalSummary(items, true)).toEqual({ text: "fix it", round: 2, check: null, reviewer: null });
+  });
+
   it("is hidden when no task is running or a normal message came after the goal", () => {
     expect(goalSummary(goal, false)).toBeNull();
     expect(goalSummary([...goal, user("u2", "thanks")], true)).toBeNull();
