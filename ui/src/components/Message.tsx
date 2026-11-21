@@ -2,6 +2,7 @@ import type { Item } from "../store";
 import { classifyNotice } from "../lib/notice";
 import { Markdown } from "./Markdown";
 import { ToolCard } from "./ToolCard";
+import { Spinner } from "./Spinner";
 
 const NEXT_STEP = {
   stopped: "Files already written stay on disk. Send your message again to retry.",
@@ -60,7 +61,7 @@ export function Message({ item, compacting }: { item: Item; compacting?: boolean
       }
       const kind = classifyNotice(item.text);
       if (kind === "retry") return <div className="notice retry"><Retry /> {item.text.trim()}</div>;
-      if (kind === "compacting") return <div className="notice compacting">{compacting && <span className="spinner" aria-hidden />} {item.text.trim()}</div>;
+      if (kind === "compacting") return <div className="notice compacting">{compacting && <Spinner />} {item.text.trim()}</div>;
       if (kind === "compacted") return <div className="divider"><span>{item.text.trim()}</span></div>;
       return <div className="notice">{item.text}</div>;
     }

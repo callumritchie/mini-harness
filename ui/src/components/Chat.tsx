@@ -7,6 +7,7 @@ import { GoalCard } from "./GoalCard";
 import { Message } from "./Message";
 import { ToolGroup } from "./ToolGroup";
 import { Welcome } from "./Welcome";
+import { Spinner } from "./Spinner";
 
 export function Chat() {
   const items = useStore((s) => s.items);
@@ -33,7 +34,7 @@ export function Chat() {
       {items.length === 0 && <Welcome />}
       <div className="thread">
         {entries.map((e) => (e.kind === "group" ? <ToolGroup key={e.id} tools={e.tools} /> : <Message key={e.id} item={e} compacting={e.id === compacting} />))}
-        {running && !ask && items[items.length - 1]?.kind !== "assistant" && <div className="thinking"><span className="spinner" /> Working…</div>}
+        {running && !ask && items[items.length - 1]?.kind !== "assistant" && <div className="thinking"><Spinner /> Working…</div>}
         <AskCard />
       </div>
     </div>

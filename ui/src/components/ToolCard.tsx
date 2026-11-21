@@ -3,6 +3,7 @@ import { useStore } from "../store";
 import type { ToolItem } from "../lib/group";
 import { diffRows, diffStats } from "../lib/diff";
 import { ToolIcon } from "./ToolIcon";
+import { Spinner } from "./Spinner";
 
 const LIMIT = 4000;
 
@@ -33,7 +34,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
     <div className={`tool ${item.isError ? "error" : ""} ${item.status}`}>
       <button className="tool-head" onClick={() => setOpen(!open)} aria-expanded={open}>
         <span className="tool-state">
-          {item.status === "running" ? <span className="spinner" aria-label="running" /> : item.isError ? <span className="st bad" role="img" aria-label="failed">✕</span> : <span className="st ok" role="img" aria-label="done">✓</span>}
+          {item.status === "running" ? <Spinner label="running" /> : item.isError ? <span className="st bad" role="img" aria-label="failed">✕</span> : <span className="st ok" role="img" aria-label="done">✓</span>}
         </span>
         <ToolIcon name={item.name} />
         <span className="tool-display">{item.display}</span>

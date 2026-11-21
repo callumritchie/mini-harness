@@ -11,6 +11,7 @@ import { TopBar } from "./components/TopBar";
 import type { ServerEvent, SessionRow, TranscriptItem } from "./protocol";
 import { connect } from "./socket";
 import { fromTranscript, useStore } from "./store";
+import { Spinner } from "./components/Spinner";
 
 async function refreshSessions() {
   try {
@@ -96,7 +97,7 @@ export default function App() {
       <div className={allow ? "shell allow" : "shell"}>
         <main className="main">
           <TopBar />
-          {!connected && <div className="banner" role="status"><span className="spinner" aria-hidden /> Disconnected from the server. Reconnecting…</div>}
+          {!connected && <div className="banner" role="status"><Spinner /> Disconnected from the server. Reconnecting…</div>}
           <Chat />
           <Composer />
         </main>
