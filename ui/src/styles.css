@@ -315,15 +315,28 @@ kbd { font-family: inherit; font-size: 11px; background: var(--panel); border: 1
 .rightpanel { width: var(--right-w, 400px); flex: none; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-width: 0; position: relative; }
 .resize { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 3; }
 .resize:hover, .resize.drag { background: color-mix(in srgb, var(--accent) 40%, transparent); }
-.tabs { display: flex; border-bottom: 1px solid var(--line); } .tabs button { flex: 1; background: none; border: 0; border-bottom: 2px solid transparent; padding: 11px 9px; color: var(--muted); border-radius: 0; }
-.tabs button:hover { color: var(--text); }
-.tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs { display: flex; align-items: center; height: var(--bar-h); padding: 0 10px; border-bottom: 1px solid var(--line); flex: none; }
+.segtabs { flex: 1; display: flex; gap: 2px; padding: 2px; background: var(--sunken); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.segtabs button { flex: 1; background: none; border: 0; border-radius: 4px; padding: 4px 8px; color: var(--muted); font-size: var(--fs-sm); }
+.segtabs button:hover { color: var(--text); }
+.segtabs button.on { background: var(--raised); color: var(--text); font-weight: 600; box-shadow: var(--shadow-sm), 0 0 0 1px var(--line-strong); }
 .count { background: var(--accent); color: var(--accent-text); border-radius: 9px; font-size: 11px; padding: 0 6px; margin-left: 6px; }
 .panel-body { flex: 1; overflow: auto; min-height: 0; }
-.empty-panel { color: var(--muted); padding: 24px 16px; text-align: center; font-size: 13.5px; }
+.empty-panel { color: var(--muted); line-height: 1.5; padding: 24px 16px; text-align: center; font-size: 13.5px; }
 .tree-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--line); }
 .node { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 3px 8px; font-size: 12.5px; font-family: ui-monospace, Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 0; }
-.node:hover:not(:disabled) { background: var(--sunken); } .node.on { background: var(--accent-soft); color: var(--accent); } .node:disabled { color: var(--muted); }
+.node:hover:not(:disabled) { background: var(--hover); } .node.on { background: var(--accent-soft); color: var(--accent-ink); } .node:disabled { color: var(--muted); }
+.node .lock { vertical-align: -1px; } .node .nname { overflow: hidden; text-overflow: ellipsis; }
+.mark { margin-left: 8px; font-size: var(--fs-xs); font-weight: 700; font-family: var(--font-ui); border-radius: 3px; padding: 0 4px; }
+.mark.new { background: var(--ok-soft); color: var(--ok); } .mark.mod { background: var(--warn-soft); color: var(--warn); }
+.filterbox { padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.filterbox input { width: 100%; background: var(--sunken); border: 1px solid var(--field-line); border-radius: var(--radius-sm); padding: 4px 8px; color: var(--text); }
+.viewer-head .back { padding: 3px 6px; display: inline-flex; }
+.copydiff { margin-left: auto; }
+.ccard { background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-card); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.ccard .eyebrow { margin: 0; } .context .lead { margin: 0; font-size: var(--fs-md); }
+.context .rows li.group > .rows.nested { grid-column: 1 / -1; padding-left: 20px; margin-top: 6px; }
+.context .swatch.conv { background: var(--line-strong); }
 .viewer-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
 .path { font-family: ui-monospace, Menlo, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code .row, .diff .row { display: flex; gap: 8px; } .code code, .diff code { white-space: pre; flex: 1; }

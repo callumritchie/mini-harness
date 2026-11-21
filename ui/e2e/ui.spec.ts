@@ -80,7 +80,7 @@ test("the whole demo walk-through", async ({ page }) => {
   await expect(page.locator(".tree .node", { hasText: ".env" })).toBeDisabled();
   await page.locator(".tree .node", { hasText: "README.md" }).click();
   await expect(page.locator(".viewer .code")).toContainText("Demo folder");
-  await page.getByRole("button", { name: "← Files" }).click();
+  await page.getByRole("button", { name: "Back to files" }).click();
 
   // Stop
   await box.fill("long");

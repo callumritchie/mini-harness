@@ -53,12 +53,14 @@ export function RightPanel() {
   return (
     <aside className="rightpanel" style={{ "--right-w": `${width}px` } as React.CSSProperties}>
       <div className={`resize ${drag ? "drag" : ""}`} onPointerDown={(e) => { e.preventDefault(); setDrag(true); }} role="separator" aria-orientation="vertical" aria-label="Resize panel" />
-      <div className="tabs" role="tablist">
-        {TABS.map((t) => (
-          <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "on" : ""} onClick={() => patch({ rightTab: t.id })}>
-            {t.label}{t.id === "changes" && count > 0 ? <span className="count">{count}</span> : null}
-          </button>
-        ))}
+      <div className="tabs">
+        <div className="segtabs" role="tablist">
+          {TABS.map((t) => (
+            <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "on" : ""} onClick={() => patch({ rightTab: t.id })}>
+              {t.label}{t.id === "changes" && count > 0 ? <span className="count">{count}</span> : null}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="panel-body">
         {tab === "files" && <FilesPanel />}

@@ -5,6 +5,7 @@ import { PermissionDialog } from "../src/components/PermissionDialog";
 import { AskCard } from "../src/components/AskCard";
 import { ToolCard } from "../src/components/ToolCard";
 import { DiffView } from "../src/components/DiffView";
+import { filterTree } from "../src/components/FilesPanel";
 import { ConfirmAllow } from "../src/components/ConfirmAllow";
 import type { Info } from "../src/protocol";
 import { initialState, useStore } from "../src/store";
@@ -178,5 +179,20 @@ describe("Allow mode needs a confirmation", () => {
     useStore.setState({ info });
     useStore.getState().submit("/permissions allow");
     expect(useStore.getState().confirmAllow).toBe(true);
+  });
+});
+
+describe("filterTree", () => {
+  const tree = [
+    { name: "src", path: "src", type: "dir" as const, children: [{ name: "app.py", path: "src/app.py", type: "file" as const }, { name: "util.py", path: "src/util.py", type: "file" as const }] },
+    { name: "README.md", path: "README.md", type: "file" as const },
+  ];
+
+  it("keeps matching files and the folders that lead to them", () => {
+    expect(filterTree(tree, "app").map((n) => n.path)).toEqual(["src"]);
+    expect(filterTree(tree, "app")[0].children?.map((n) => n.path)).toEqual(["src/app.py"]);
+    expect(filterTree(tree, "readme").map((n) => n.path)).toEqual(["README.md"]);
+    expect(filterTree(tree, "zzz")).toEqual([]);
+    expect(filterTree(tree, "  ")).toBe(tree);
   });
 });

@@ -13,7 +13,7 @@ export function ChangesPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [changes],
   );
-  if (paths.length === 0) return <div className="empty-panel">Files the agent writes or edits in this session appear here, with a diff.</div>;
+  if (paths.length === 0) return <div className="empty-panel">Files the agent writes or edits in this session appear here, with a diff.<br /><span className="muted">A resumed session starts empty: changes from before it was loaded are not restored.</span></div>;
   const current = selected && changes[selected] ? selected : paths[0];
   return (
     <div className="changes">
