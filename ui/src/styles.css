@@ -292,7 +292,7 @@ kbd { font-family: inherit; font-size: 11px; background: var(--panel); border: 1
 .composer .box:focus-within { border-color: var(--accent); box-shadow: var(--focus); }
 .composer textarea { flex: 1; resize: none; border: 0; outline: 0; background: none; max-height: 220px; line-height: 1.5; padding: 4px 0; box-shadow: none; }
 .composer .send, .composer .stop { border: 0; border-radius: 10px; padding: 6px 12px; font-weight: 600; min-width: 36px; }
-.composer .send { background: var(--accent); color: var(--accent-text); } .composer .stop { background: var(--bad); color: #fff; }
+.composer .send { background: var(--accent); color: var(--accent-text); } .composer .stop { background: var(--bad); color: var(--panel); }
 .composer .foot { font-size: 11.5px; color: var(--muted); text-align: center; margin-top: 6px; }
 .palette { position: absolute; bottom: 62px; left: 16px; right: 16px; list-style: none; margin: 0; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); z-index: 5; }
 .palette li { padding: 6px 10px; border-radius: 8px; cursor: pointer; display: flex; gap: 10px; } .palette li.active, .palette li:hover { background: var(--sunken); } .palette span { color: var(--muted); }
