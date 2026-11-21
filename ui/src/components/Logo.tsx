@@ -1,8 +1,8 @@
-/** A small neutral mark: a harness strap, two rails and a cross-bar. */
+/** The product's mark: a neutral tile with an "H" (the design keeps the brand out of the accent colour). */
 export function Logo({ size = 20 }: { size?: number }) {
   return (
-    <svg className="logo-mark" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M7 4v16M17 4v16M7 9h10M7 15h10" />
-    </svg>
+    <span className="brand-tile" style={{ width: size, height: size, borderRadius: Math.round(size / 4), fontSize: Math.round(size * 0.55) }} aria-hidden>
+      H
+    </span>
   );
 }

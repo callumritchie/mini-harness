@@ -38,7 +38,7 @@ export function SettingsMenu({ context, pct }: { context: number; pct: number })
           {!info.price_known && !total?.usd ? "cost unknown" : formatCost(total?.usd ?? 0, total?.complete ?? true)}
         </span>
         <span className="sdiv d2" aria-hidden />
-        <span className="mini-bar d2" aria-hidden><span className={pct >= 80 ? "high" : ""} style={{ width: `${pct}%` }} /></span>
+        <span className="mini-bar" aria-hidden><span className={pct >= 80 ? "high" : ""} style={{ width: `${pct}%` }} /></span>
         <span className="ctx">{formatTokens(context)} / {formatTokens(info.limit)}</span>
       </button>
       {open && (

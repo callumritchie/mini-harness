@@ -1,4 +1,5 @@
 import { useStore } from "../store";
+import { Icon } from "./Icon";
 import { Logo } from "./Logo";
 
 const STARTERS = [
@@ -13,16 +14,24 @@ export function Welcome() {
   const info = useStore((s) => s.info);
   const demo = useStore((s) => s.demo);
   const patch = useStore((s) => s.patch);
+  const project = info?.project.split("/").pop();
+  const loaded = info
+    ? [info.agents_md && "AGENTS.md loaded", info.skills.length > 0 && `${info.skills.length} skill${info.skills.length === 1 ? "" : "s"}`,
+       info.mcp_tools.length > 0 && `${info.mcp_tools.length} MCP tool${info.mcp_tools.length === 1 ? "" : "s"}`].filter(Boolean)
+    : [];
   return (
     <div className="welcome">
-      <Logo size={36} />
-      {info && <div className="where-title" title={info.project}>{info.project.split("/").pop()}</div>}
-      <h1>What should we work on?</h1>
-      <p className="where">
-        {info ? <>Working in <code title={info.project}>{info.project.split("/").pop()}</code> with <b>{info.model}</b>.</> : "Connecting…"}
-        {demo && " This is the demo: a scripted model, nothing is real. Try “hello”, “create a file”, then “delete it”."}
-      </p>
-      {info && !info.client_ready && <div className="warnpanel" role="alert">{info.client_error ?? "No API key yet."}</div>}
+      <div>
+        <Logo size={28} />
+        <h1 title={info?.project}>{project ? <>What should we work on in {project}?</> : "What should we work on?"}</h1>
+        <p className="where">
+          {info ? <>Working with <b>{info.model}</b>.{loaded.length > 0 && <> {loaded.join(" · ")}.</>}</> : "Connecting…"}
+          {demo && " This is the demo: a scripted model, nothing is real. Try “hello”, “create a file”, then “delete it”."}
+        </p>
+      </div>
+      {info && !info.client_ready && (
+        <div className="warnpanel alert" role="alert"><Icon name="warning" /><span>{info.client_error ?? "No API key yet."}</span></div>
+      )}
       <div className="starters">
         {STARTERS.map((s) => (
           <button key={s.title} className="starter" onClick={() => patch({ draft: s.text })}>
@@ -32,7 +41,8 @@ export function Welcome() {
         ))}
       </div>
       <p className="keys">
-        <kbd>/</kbd> commands · <kbd>⌘K</kbd> message box · <kbd>⌘B</kbd> sessions · <kbd>Esc</kbd> stop. Risky actions always ask first.
+        <span><kbd>/</kbd> commands</span><span><kbd>⌘K</kbd> message box</span><span><kbd>⌘B</kbd> sessions</span><span><kbd>Esc</kbd> stop</span>
+        <span>Risky actions always ask first.</span>
       </p>
     </div>
   );

@@ -12,6 +12,7 @@ import type { ServerEvent, SessionRow, TranscriptItem } from "./protocol";
 import { connect } from "./socket";
 import { fromTranscript, useStore } from "./store";
 import { Spinner } from "./components/Spinner";
+import { Logo } from "./components/Logo";
 
 async function refreshSessions() {
   try {
@@ -84,9 +85,13 @@ export default function App() {
   if (!token) {
     return (
       <div className="gate">
-        <h1>Mini Harness</h1>
-        <p>This page needs the private address the server printed in your terminal (it ends with <code>?token=…</code>).</p>
-        <p className="muted">Run <code>python3 agent.py --ui</code> and open the link it shows.</p>
+        <div className="gate-card">
+          <Logo size={28} />
+          <h1>Open Mini Harness from your terminal</h1>
+          <p>This page needs the private address the server printed in your terminal (it ends with <code>?token=…</code>).</p>
+          <pre>python3 agent.py --ui</pre>
+          <p className="muted">Run it in your project folder and open the link it shows.</p>
+        </div>
       </div>
     );
   }
@@ -97,7 +102,7 @@ export default function App() {
       <div className={allow ? "shell allow" : "shell"}>
         <main className="main">
           <TopBar />
-          {!connected && <div className="banner" role="status"><Spinner /> Disconnected from the server. Reconnecting…</div>}
+          {!connected && <div className="banner" role="status"><Spinner size={12} /> Disconnected from the local server. Reconnecting…</div>}
           <Chat />
           <Composer />
         </main>

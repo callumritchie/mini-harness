@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../store";
+import { Icon } from "./Icon";
 
 const COMMANDS: { cmd: string; help: string }[] = [
   { cmd: "/new", help: "start a new session" },
@@ -73,8 +74,8 @@ export function Composer() {
           ref={ref}
           id="composer"
           value={text}
-          rows={1}
-          placeholder={connected ? (running ? "Working… press Stop to interrupt" : "Message Mini Harness, or / for commands") : info ? "Can't send while disconnected" : "Connecting…"}
+          rows={2}
+          placeholder={connected ? (running ? "Working… you can type, but sending waits until this turn ends" : "Message Mini Harness, or / for commands") : info ? "Can't send while disconnected" : "Connecting…"}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (matches.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
@@ -92,15 +93,17 @@ export function Composer() {
           }}
           autoFocus
         />
-        {running ? (
-          <button className="stop" onClick={cancel} aria-label="Stop">
-            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><rect width="10" height="10" rx="1.5" fill="currentColor" /></svg> Stop
-          </button>
-        ) : (
-          <button className="send" onClick={send} disabled={!text.trim() || !connected} aria-label="Send">↑</button>
-        )}
+        <div className="cfoot">
+          <button className="cmds" onClick={() => { setText("/"); ref.current?.focus(); }} title="Show the commands">/ commands</button>
+          <span className="spacer" />
+          <span className="chint">{running ? "Esc to stop · the turn is dropped" : "Enter to send · Shift+Enter for a new line"}</span>
+          {running ? (
+            <button className="btn btn-sm stop" onClick={cancel} aria-label="Stop"><Icon name="stop" size={12} /> Stop</button>
+          ) : (
+            <button className="send" onClick={send} disabled={!text.trim() || !connected} aria-label="Send"><Icon name="send" /></button>
+          )}
+        </div>
       </div>
-      <div className="foot"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · <kbd>Esc</kbd> stop</div>
     </div>
   );
 }

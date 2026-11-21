@@ -23,6 +23,9 @@ export function AskCard() {
 
   if (!ask) return null;
   return (
+    <div className="agent-row">
+    <span className="agent-mark" />
+    <div className="agent-body">
     <div className="ask" role="group" aria-labelledby="ask-eyebrow ask-q" ref={card}>
       <div className="eyebrow" id="ask-eyebrow">The agent is waiting for your answer</div>
       <div className="ask-q" id="ask-q">{ask.question}</div>
@@ -49,6 +52,8 @@ export function AskCard() {
         <button type="submit" disabled={!text.trim()}>Send</button>
         <button type="button" className="ghost" onClick={() => answer(null)}>Skip</button>
       </form>
+    </div>
+    </div>
     </div>
   );
 }

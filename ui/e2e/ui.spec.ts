@@ -13,7 +13,7 @@ test("the whole demo walk-through", async ({ page }) => {
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 
   await page.goto(URL);
-  await expect(page.getByText("What should we work on?")).toBeVisible();
+  await expect(page.getByText(/What should we work on/)).toBeVisible();
   await expect(page.locator(".badge.demo")).toBeVisible();
   expect(page.url()).not.toContain("token="); // the token is removed from the address bar
   await page.screenshot({ path: shot("01-empty") });
@@ -103,7 +103,7 @@ test("the whole demo walk-through", async ({ page }) => {
   // sessions: new, then back to the first
   await expect(page.locator(".sessions button").first()).toContainText("hello");
   await page.getByRole("button", { name: /New session/ }).click();
-  await expect(page.getByText("What should we work on?")).toBeVisible();
+  await expect(page.getByText(/What should we work on/)).toBeVisible();
   await page.locator(".sessions button", { hasText: "hello" }).click();
   await expect(page.locator(".msg.user .bubble").first()).toHaveText("hello");
   await page.screenshot({ path: shot("06-resumed") });
