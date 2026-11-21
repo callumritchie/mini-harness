@@ -62,7 +62,12 @@ python3 agent.py --permissions judge
 python3 agent.py --goal "add add() with a test" --verify "python3 -m unittest -q" --allow "python3 -m unittest"
 ```
 
-Headless exit codes: `0` done, `1` error (no key, bad model, API error), `3` did not finish (turn or spending limit, goal not met), `130` Ctrl-C.
+Headless exit codes: `0` done, `1` error (no key, bad model, rejected request), `3` did not finish (turn or spending limit, goal not met), `4` the provider was busy or
+unreachable (try again; `-c` continues the session), `130` Ctrl-C.
+
+Two flags guard what a project can start: a folder's `.mcp.json` runs programs, so it is only used after you approve that exact file once with `--trust-mcp`
+(remembered until the file changes), and environment variables named like secrets (`*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`) are not passed to commands or MCP
+servers unless you name them with `--pass-env NAME`.
 
 ## Development
 

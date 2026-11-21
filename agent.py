@@ -3,10 +3,13 @@
 import argparse
 import atexit
 import dataclasses
+import itertools
 import json
 import os
+import random
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,12 +42,15 @@ KEY_VARS = {"anthropic": "ANTHROPIC_API_KEY", "deepseek": "DEEPSEEK_API_KEY"}
 MAX_TOKENS = {"anthropic": 32000, "deepseek": 8192}
 DEFAULT_LIMIT = 150_000  # tokens in one request before the conversation is compacted
 KNOWN_WINDOWS = {"deepseek-flash": 1_000_000, "deepseek-v4-pro": 1_000_000}  # from DeepSeek's pricing page
-MAX_STEPS = 50  # model calls in one task unless --max-turns says otherwise
+MAX_STEPS = 50  # model calls in one task when no limit is set (--max-turns and goal mode set their own)
 GOAL_STEPS = 100  # model calls in a whole goal unless --max-turns says otherwise
 SUBAGENT_STEPS = 30
 PARALLEL_SUBAGENTS = 4  # subagent calls from one reply that run at the same time
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
-EXIT_OK, EXIT_ERROR, EXIT_NOT_FINISHED, EXIT_INTERRUPTED = 0, 1, 3, 130
+EXIT_OK, EXIT_ERROR, EXIT_NOT_FINISHED, EXIT_RETRYABLE, EXIT_INTERRUPTED = 0, 1, 3, 4, 130  # 4: the provider was busy or unreachable; try again
+RETRIES = 3  # times one model call is repeated after a dropped connection, a rate limit or an overloaded provider
+RETRY_BASE = 1.0  # seconds; the wait doubles each time (tests set it to 0)
+RETRY_STATUS = {408, 409, 429, 500, 502, 503, 504, 529}
 # Claude models that get the newer web search (dynamic filtering). Everything else gets the basic version.
 MODERN_WEB_SEARCH = ("claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                      "claude-sonnet-5", "claude-sonnet-4-6", "claude-fable")
@@ -69,8 +75,20 @@ def make_client(provider):
     if not key:
         raise UserError(missing_key_help(provider))
     if provider == "deepseek":
-        return anthropic.Anthropic(api_key=key, base_url=DEEPSEEK_BASE_URL)
-    return anthropic.Anthropic(api_key=key)
+        return anthropic.Anthropic(api_key=key, base_url=DEEPSEEK_BASE_URL, max_retries=3)
+    return anthropic.Anthropic(api_key=key, max_retries=3)  # the SDK retries a request that has not started; agent_loop retries one that broke mid-reply
+
+
+def retryable(err):
+    """Might the same request work a moment later? A dropped connection or timeout, a rate limit, or the provider being busy or down.
+    (A wrong key, a bad request or an unknown model will not get better by waiting.)"""
+    if isinstance(err, anthropic.APIConnectionError):  # includes timeouts
+        return True
+    if isinstance(err, anthropic.APIStatusError):
+        body = getattr(err, "body", None)  # an error event in the middle of a stream has status 200 and the real kind in the body
+        kind = ((body.get("error") or {}).get("type") if isinstance(body, dict) and isinstance(body.get("error"), dict) else None)
+        return err.status_code in RETRY_STATUS or kind in ("overloaded_error", "api_error", "rate_limit_error")
+    return False
 
 
 def missing_key_help(provider):
@@ -90,6 +108,13 @@ def missing_key_help(provider):
 
 def explain(err, provider, model):
     """Turn an API error into one clear sentence. Most specific classes first."""
+    message = _explain(err, provider, model)
+    if getattr(err, "progress_kept", False):
+        message += " The work done so far is kept (files changed stay changed): say 'continue' to carry on."
+    return message
+
+
+def _explain(err, provider, model):
     if isinstance(err, anthropic.AuthenticationError):
         return f"The {provider} API key was rejected. Check that {KEY_VARS[provider]} holds a valid, active key."
     if isinstance(err, anthropic.PermissionDeniedError):
@@ -209,7 +234,7 @@ def run_parallel(run, session, uses, finish):
     cancel = AnyEvent(run.cancel, batch)
 
     def work(tag, use):
-        _worker.tag, _worker.cancel = tag, cancel
+        _worker.tag, _worker.cancel, _worker.share = tag, cancel, len(uses)
         return tools.run(use.name, use.input, session)
 
     pool = ThreadPoolExecutor(max_workers=PARALLEL_SUBAGENTS)
@@ -261,7 +286,8 @@ def agent_loop(run, session):
     The model's reply blocks go into the history exactly as they came back. Every tool_use gets a tool_result."""
     tool_defs = tool_list(run.provider, run.model, run.web_search, run.mcp, run.tool_names)
     extra = request_body(run)
-    for step in range(MAX_STEPS):
+    # with a turn limit, Limits.before_call ends the task (with its own message); the fixed bound only applies when there is none
+    for step in itertools.count() if run.limits and run.limits.max_turns else range(MAX_STEPS):
         check_cancel(run)
         if run.limits:
             run.limits.before_call(session)
@@ -269,14 +295,27 @@ def agent_loop(run, session):
             run.compactor.maybe(session, mid_task=True)
         beta = {"betas": [compaction.BETA]} if session.has_compaction_block() else {}  # a compaction block needs the beta header
         open_stream = run.client.beta.messages.stream if beta else run.client.messages.stream
-        with open_stream(
-            model=run.model, max_tokens=MAX_TOKENS[run.provider], system=session.system, tools=tool_defs,
-            messages=session.messages, **extra, **beta,
-        ) as stream:
-            for text in stream.text_stream:
-                check_cancel(run)
-                run.on_text(text)
-            reply = stream.get_final_message()
+        attempt = 0
+        while True:
+            try:
+                with open_stream(
+                    model=run.model, max_tokens=MAX_TOKENS[run.provider], system=session.system, tools=tool_defs,
+                    messages=session.messages, **extra, **beta,
+                ) as stream:
+                    for text in stream.text_stream:
+                        check_cancel(run)
+                        run.on_text(text)
+                    reply = stream.get_final_message()
+                break
+            except anthropic.APIError as e:  # a reply that broke off is thrown away and asked for again: nothing of it is in the history
+                attempt += 1
+                if attempt > RETRIES or not retryable(e):
+                    raise
+                wait = RETRY_BASE * 2 ** attempt * (0.5 + random.random() / 2)
+                run.say(f"  {explain(e, run.provider, run.model)} Trying again in {wait:.0f}s ({attempt}/{RETRIES}).")
+                for _ in range(int(wait * 10)):
+                    check_cancel(run)
+                    time.sleep(0.1)
         usage = session.record(getattr(reply, "usage", None), run.model)
         session.add_assistant(reply.content, usage, run.model, reply.stop_reason)
         if run.on_usage:
@@ -337,6 +376,14 @@ def agent_loop(run, session):
 _UNSET = object()
 
 
+def keeps_progress(err, run, session):
+    """After the provider failed for good (not our error, not a Stop) with at least one finished round, the history is consistent
+    (it ends with tool results, never with a half reply), so the work done is kept and the person can say 'continue'.
+    Only on Claude: consecutive user messages are valid there (they are combined). Elsewhere the task is cut back as before."""
+    return (isinstance(err, anthropic.APIError) and retryable(err) and run.provider == "anthropic" and run.tool_names is None
+            and len(session.messages) > session.task_start + 1)
+
+
 def run_task(run, session, task, human=_UNSET):
     """Run one user task. If anything goes wrong (error, limit or Ctrl-C) the conversation and the read-record are rolled
     back to where the task started (or, if it was compacted meanwhile, to just after the summary), so history never
@@ -352,10 +399,13 @@ def run_task(run, session, task, human=_UNSET):
     session.add_user(content, human=task if human is _UNSET else human)
     session.cancel, session.on_change = run.cancel, run.on_change
     if run.tool_names is None:
-        session.run_subagent = lambda subtask: run_subagent(run, session, subtask, tag=getattr(_worker, "tag", None), cancel=getattr(_worker, "cancel", None))
+        session.run_subagent = lambda subtask: run_subagent(run, session, subtask, tag=getattr(_worker, "tag", None), cancel=getattr(_worker, "cancel", None), share=getattr(_worker, "share", 1))
     try:
         return agent_loop(run, session)
-    except BaseException:
+    except BaseException as e:
+        if keeps_progress(e, run, session):  # the files already changed, and the history ends cleanly with tool results: keep it
+            e.progress_kept = True
+            raise
         session.abort_task()
         raise
 
@@ -366,17 +416,20 @@ def final_text(reply):
 
 # ---------- subagents ----------
 
-def run_subagent(run, parent, task, kind="subagent", steps=SUBAGENT_STEPS, tag=None, cancel=None):
+def run_subagent(run, parent, task, kind="subagent", steps=SUBAGENT_STEPS, tag=None, cancel=None, share=1):
     """The same loop in a fresh, empty conversation with read-only tools and its own log. Returns only the final answer.
     Failures come back as a ToolError, so the caller sees them as an error result. When several run at once, `tag` labels their
     activity lines ([2] ...) and `cancel` is the batch's stop event, so one failure can stop the others."""
     pre = f"[{tag}] " if tag else ""
+    budget = None
+    if run.limits and run.limits.max_cost:  # helpers running side by side split what is left, so together they cannot pass the cap
+        budget = max((run.limits.max_cost - run.limits.spent(parent)) / (share or 1), 1e-9)
     sub = Session.start(run.model, kind=kind, parent=parent.id)
     perms = Permissions(False, mode="allow" if run.permissions.mode == "allow" else "ask", rules=run.permissions.rules,
                         say=lambda m: run.say(f"    {pre}{m.strip()}"))
     sub_run = dataclasses.replace(
         run, permissions=perms, tool_names=list(tools.SUBAGENT_TOOLS), web_search=False, mcp=None, compactor=None,
-        limits=Limits(sub, max_turns=steps), on_text=lambda t: None, on_usage=None,
+        limits=Limits(sub, max_turns=steps, max_cost=budget), on_text=lambda t: None, on_usage=None,
         on_tool=lambda name, args: run.say(f"  {pre}↳ {tools.describe_call(name, args)}"),
         cancel=cancel if cancel is not None else run.cancel,
     )
@@ -461,9 +514,21 @@ def make_run(client, provider, model, args, permissions, mcp, session, **overrid
     return run
 
 
-def start_mcp_and_skills():
-    """Start the MCP servers from .mcp.json and report what was found. Returns the MCP manager (None if there are none)."""
+def start_mcp_and_skills(args=None):
+    """Start the MCP servers from .mcp.json and report what was found. Returns the MCP manager (None if there are none).
+    A .mcp.json starts programs, so it only runs if you approved this exact file: pass --trust-mcp once (it is remembered until
+    the file changes)."""
     found, warnings = skills.discover(Path.cwd())
+    if (Path.cwd() / ".mcp.json").is_file() and not mcplib.is_trusted(Path.cwd()):
+        if args is not None and getattr(args, "trust_mcp", False):
+            mcplib.trust(Path.cwd())
+        else:
+            manager = mcplib.Manager()
+            manager.warnings.append(".mcp.json was not used: it starts programs, and you have not approved this file. Read it, then run once with "
+                                    "--trust-mcp (it is remembered until the file changes).")
+            for w in manager.warnings + warnings:
+                print(dim(f"  warning: {w}"), file=sys.stderr)
+            return None
     manager = mcplib.Manager.load(Path.cwd())
     atexit.register(manager.close)
     for w in manager.warnings + warnings:
@@ -518,7 +583,7 @@ def headless(args):
         client = make_client(provider)
     if args.max_cost and pricing.prices(model) is None:
         raise UserError(f"--max-cost needs a price for the model, and there is none for '{model}' ({pricing.missing_note(model)}). Use --max-turns instead.")
-    mcp = start_mcp_and_skills()
+    mcp = start_mcp_and_skills(args)
     permissions = make_permissions(args, interactive=False)
     session.ask_human = lambda question, choices: None  # nobody can answer
     limits = Limits(session, max_turns=args.max_turns or (GOAL_STEPS if args.goal else MAX_STEPS), max_cost=args.max_cost)
@@ -536,6 +601,14 @@ def headless(args):
                 ok, stopped = False, "the reply was cut off at the maximum length"
     except NotFinished as e:
         ok, stopped = False, str(e)
+    except anthropic.APIError as e:  # the session exists, so say which one and what it cost: the run can be continued with -c
+        message = explain(e, provider, model)
+        code = EXIT_RETRYABLE if retryable(e) else EXIT_ERROR
+        print(f"Error: {message}", file=sys.stderr)
+        print(dim(f"  session {session.id} ({pricing.money(session.totals['cost_usd'])} so far): continue it with -c"), file=sys.stderr)
+        if args.json:
+            print_json(run_summary(session, model, ok=False, result="", stopped=None, error=message, exit_code=code))
+        return code
     usd, complete, note = session.cost_summary()
     if args.json:
         print_json(run_summary(session, model, ok=ok, result=result, stopped=stopped, error=None, **({"goal": {"done": goal_result.done, "rounds": goal_result.rounds, "reason": goal_result.reason}} if goal_result else {})))
@@ -614,6 +687,9 @@ def build_parser():
     ap.add_argument("--context-limit", type=positive_int, metavar="TOKENS", help="compact the conversation when a request would reach this many tokens (default 150000)")
     ap.add_argument("--compaction", choices=["auto", "server", "client"], default="auto",
                     help="auto: Anthropic's server-side compaction on Claude, a model-written summary elsewhere; or force one")
+    ap.add_argument("--trust-mcp", action="store_true", help="approve this folder's .mcp.json (it starts programs); remembered until the file changes")
+    ap.add_argument("--pass-env", action="append", default=[], metavar="NAME",
+                    help="pass this environment variable to commands and MCP servers even though its name looks like a secret. Repeatable")
     ap.add_argument("--no-web-search", action="store_true", help="do not offer the provider's web search tool")
     ap.add_argument("--ui", action="store_true", help="start the local web UI and open it in your browser (needs: pip install 'mini-harness[ui]')")
     ap.add_argument("--port", type=int, default=8765, metavar="N", help="with --ui: the port to listen on (default 8765; 127.0.0.1 only)")
@@ -629,6 +705,7 @@ def error_json(args, message, code):
 
 def main():
     args = build_parser().parse_args()
+    safety.PASS_ENV.update(args.pass_env)
     headless_mode = args.print is not None or args.goal is not None
     try:
         if args.print is not None and args.goal is not None:
@@ -661,9 +738,9 @@ def main():
         model = args.model or default_model()
         message = explain(e, provider_for(model), model)
         print(f"Error: {message}", file=sys.stderr)
+        code = EXIT_RETRYABLE if retryable(e) else EXIT_ERROR
         if args.json:
-            error_json(args, message, EXIT_ERROR)
-        code = EXIT_ERROR
+            error_json(args, message, code)
     sys.exit(code)
 
 

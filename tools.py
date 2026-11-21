@@ -9,6 +9,7 @@ import os
 import re
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -25,6 +26,8 @@ MAX_GLOB_COLLECT = 5_000  # files one glob will collect before stopping
 SUBAGENT_RESULT_CHARS = 20_000
 DEFAULT_BASH_TIMEOUT = 120
 MAX_BASH_TIMEOUT = 600
+HEAD_SHARE = 0.3  # of a cut result, the part kept from the start (the rest comes from the end, where a failing test or build says why)
+MAX_BASH_BYTES = 64_000_000  # a command that prints more than this is killed
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 
 
@@ -396,10 +399,11 @@ def edit_file(a, session):
 
 def bash(a, session):
     timeout = a.get("timeout_seconds", DEFAULT_BASH_TIMEOUT)
-    env = {k: v for k, v in os.environ.items() if k not in safety.OWN_SECRET_VARS}  # our own API keys never reach a command
+    env = safety.clean_env()  # our API keys, and anything named like a secret, never reach a command (unless --pass-env)
     cancel = getattr(session, "cancel", None)
-    p = subprocess.Popen(a["command"], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    p = subprocess.Popen(a["command"], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace",
                          stdin=subprocess.DEVNULL, env=env, start_new_session=True)  # its own process group, so Stop can kill all of it
+    out, err = Capture(p.stdout), Capture(p.stderr)
 
     def kill():
         try:
@@ -412,17 +416,25 @@ def bash(a, session):
     try:
         while True:
             try:
-                stdout, stderr = p.communicate(timeout=0.2)
+                p.wait(timeout=0.2)
                 break
             except subprocess.TimeoutExpired:
                 if cancel is not None and cancel.is_set():
                     raise Interrupted()
+                if out.total + err.total > MAX_BASH_BYTES:
+                    kill()
+                    raise ToolError(f"Command printed more than {MAX_BASH_BYTES // 1_000_000} MB and was killed. Send its output to a file and read the part you need, or filter it.")
                 if time.monotonic() > deadline:
                     kill()
                     raise ToolError(f"Command timed out after {timeout}s and was killed. Run something smaller, or raise timeout_seconds (max {MAX_BASH_TIMEOUT}), or start long jobs in the background with output sent to a file.")
     except BaseException:  # Ctrl-C, Stop, a timeout: never leave the command running
         kill()
         raise
+    for cap in (out, err):  # a child the command left running can hold the pipe open: do not wait for it for ever
+        cap.thread.join(timeout=2)
+    for stream in (p.stdout, p.stderr):
+        stream.close()
+    stdout, stderr = out.text(), err.text()
     output = "".join(
         f"--- {label} ---\n{text}" + ("" if text.endswith("\n") else "\n")
         for label, text in (("stdout", stdout), ("stderr", stderr)) if text
@@ -554,9 +566,44 @@ IMPLEMENTATIONS = {f.__name__: f for f in (read_file, write_file, edit_file, bas
 # ---------- running ----------
 
 def clip(text):
+    """Keep the start and the end of a long result and cut the middle: for a test or build run the reason it failed is at the end."""
     if len(text) <= MAX_TOOL_OUTPUT:
         return text
-    return text[:MAX_TOOL_OUTPUT] + f"\n... [cut: {len(text) - MAX_TOOL_OUTPUT} more characters. Ask for a smaller piece (offset/limit, a narrower pattern, or filter the command's output).]"
+    head = int(MAX_TOOL_OUTPUT * HEAD_SHARE)
+    tail = MAX_TOOL_OUTPUT - head
+    return (text[:head] + f"\n... [cut: {len(text) - MAX_TOOL_OUTPUT} characters from the middle. Ask for a smaller piece (offset/limit, a narrower "
+            "pattern, or filter the command's output).] ...\n" + text[-tail:])
+
+
+class Capture:
+    """Reads a command's output as it arrives and keeps only the start and the end, so a command that prints a lot cannot fill memory.
+    `text()` is what the model sees; `total` is how much was printed."""
+
+    def __init__(self, stream):
+        self.head, self.tail, self.total = "", "", 0
+        self.limit_head = int(MAX_TOOL_OUTPUT * HEAD_SHARE)
+        self.limit_tail = MAX_TOOL_OUTPUT - self.limit_head
+        self.thread = threading.Thread(target=self._read, args=(stream,), daemon=True)
+        self.thread.start()
+
+    def _read(self, stream):
+        try:
+            for chunk in iter(lambda: stream.read(8192), ""):
+                self.total += len(chunk)
+                room = self.limit_head - len(self.head)
+                if room > 0:
+                    self.head += chunk[:room]
+                    chunk = chunk[room:]
+                if chunk:
+                    self.tail = (self.tail + chunk)[-self.limit_tail:]
+        except (OSError, ValueError):  # the pipe was closed under us
+            pass
+
+    def text(self):
+        kept = len(self.head) + len(self.tail)
+        if self.total <= kept:
+            return self.head + self.tail
+        return self.head + f"\n... [{self.total - kept} characters cut from the middle] ...\n" + self.tail
 
 
 def run(name, args, session):

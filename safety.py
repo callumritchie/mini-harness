@@ -20,17 +20,32 @@ SAFE_COMMANDS = {"ls", "pwd", "cat", "head", "tail", "wc", "echo", "printf", "wh
 # git diff and git show are left out: they print the contents of tracked files, secrets included. log -p likewise (banned below).
 SAFE_GIT = {"status", "log", "ls-files", "rev-parse", "shortlog"}
 BANNED_OPTIONS = {  # options that make an otherwise read-only command write, run something, or print file contents
-    "sort": ("-o", "--output", "--compress-program", "-T", "--temporary-directory"),
+    "sort": ("-o", "--output", "--compress-program", "-T", "--temporary-directory", "--files0-from"),
     "git": ("--output", "--ext-diff", "--exec", "--git-dir", "--work-tree", "--open-files", "-c", "-C", "-o", "-O",
-            "-p", "-u", "--patch", "--cc", "--textconv"),
+            "-p", "-u", "--patch", "--cc", "--textconv", "--word-diff", "--color-words", "-L"),
+    "wc": ("--files0-from",),
+    "du": ("--files0-from",),
 }
+
+
+def uses_banned_option(name, tok):
+    """Is this argument one of the command's banned options, however it is written? `-ofile`, `-ro` (several short options in one),
+    `--output=f`, and a long option shortened to a prefix (`--outp`, which GNU tools accept) all count."""
+    head = tok.split("=", 1)[0]
+    for banned in BANNED_OPTIONS.get(name, ()):
+        if banned.startswith("--"):
+            if head.startswith("--") and len(head) >= 4 and banned.startswith(head):
+                return True
+        elif tok.startswith("-") and not tok.startswith("--") and banned[1] in tok[1:]:
+            return True
+    return False
 # Files that run later, on their own or when something else starts: writing one always comes to the human.
 RUNS_LATER_NAMES = ["*.sh", "*.bash", "*.zsh", "*.fish", "*.command", "*.bat", "*.cmd", "*.ps1", ".bashrc", ".bash_profile",
                     ".bash_login", ".zshrc", ".zprofile", ".zshenv", ".profile", ".envrc", "Makefile", "makefile", "GNUmakefile",
                     "*.mk", "Rakefile", "Justfile", "justfile", "Dockerfile", "Dockerfile.*", "Jenkinsfile", "Vagrantfile",
                     ".gitlab-ci.yml", ".travis.yml", "package.json", "setup.py", "conftest.py", "sitecustomize.py",
                     "usercustomize.py", "*.pth", "*.plist", "*.service", "*.timer", "crontab", "*.desktop",
-                    ".pre-commit-config.yaml"]
+                    ".pre-commit-config.yaml", ".mcp.json"]  # .mcp.json: it lists programs started at the next launch
 RUNS_LATER_DIRS = [(".git", "hooks"), (".github", "workflows"), (".husky",), ("LaunchAgents",), ("LaunchDaemons",), ("cron.d",)]
 SHELL_SYNTAX = set(";&><`$(){}\\\n\r")  # anything here and a command is no longer a plain read-only command
 SECRET_NAMES = [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.keystore", "*.jks", "*.kdbx", "id_rsa*", "id_dsa*",
@@ -54,7 +69,16 @@ def runs_later(path):
 
 
 OWN_SECRET_VARS = ("ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY")  # removed from the environment of every command we run
-PROTECTED_NAMES = {"AGENTS.md"}  # loaded into every future session: changing it changes the agent's instructions
+PROTECTED_NAMES = {"AGENTS.md", "SKILL.md"}  # loaded into every future session: changing one changes the agent's instructions
+SECRET_ENV_WORDS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL")  # a variable whose name has one of these is not passed on
+PASS_ENV = set()  # names the person chose to pass on anyway (--pass-env)
+
+
+def clean_env(environ=None):
+    """The environment for a command or an MCP server: everything except our own API keys and anything named like a secret
+    (a token, a key, a password...), unless the person passed that name with --pass-env."""
+    return {k: v for k, v in (os.environ if environ is None else environ).items()
+            if k in PASS_ENV or not (k in OWN_SECRET_VARS or any(w in k.upper() for w in SECRET_ENV_WORDS))}
 RISK_HINTS = {"rm": "deletes files", "rmdir": "deletes folders", "mv": "moves or renames files", "cp": "copies files over others",
               "chmod": "changes permissions", "chown": "changes owners", "sudo": "runs as administrator", "dd": "writes raw data",
               "kill": "stops programs", "pkill": "stops programs", "curl": "uses the network", "wget": "uses the network",
@@ -377,7 +401,7 @@ class Policy:
             if name == "git" and (not rest or rest[0] not in SAFE_GIT):
                 return [("unsafe", f"git {rest[0] if rest else ''} is not on the read-only list (status, log, diff, show, ls-files, rev-parse, blame, shortlog)".replace("  ", " "))]
             for tok in rest:
-                if any(tok == b or tok.startswith(b + "=") for b in BANNED_OPTIONS.get(name, ())):
+                if uses_banned_option(name, tok):
                     return [("unsafe", f"{name} {tok} can write files or run programs")]
                 reasons += self._token_reasons(tok)
         return reasons

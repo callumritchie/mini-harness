@@ -68,7 +68,7 @@ class Controller:
         self.permissions = agent.make_permissions(self.args, interactive=True)
         self.permissions.ask = self.ui.ask_permission
         self.permissions.say = self.ui.notice
-        self.mcp = agent.start_mcp_and_skills()
+        self.mcp = agent.start_mcp_and_skills(self.args)
         self.session.ask_human = self.ui.ask_user
         return self.info()
 
