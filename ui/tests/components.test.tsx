@@ -109,6 +109,23 @@ describe("ToolCard", () => {
     expect(useStore.getState().selectedChange).toBe("a.py");
   });
 
+  it("shows the first line of an error under the row, and the +/- counts of a write", () => {
+    useStore.setState({ changes: { "a.py": { before: "x\n", after: "y\nz\n" } } });
+    const { container } = render(<ToolCard item={item} />);
+    expect(container.querySelector(".tool-outcome")?.textContent).toBe("+2 −1");
+    cleanup();
+    render(<ToolCard item={{ ...item, isError: true, result: "Could not write a.py.\nTry again." }} />);
+    expect(screen.getByText("Could not write a.py.")).toBeTruthy();
+  });
+
+  it("keeps the input behind Show input", () => {
+    render(<ToolCard item={item} />);
+    fireEvent.click(screen.getByText("write_file(a.py, 5 chars)"));
+    expect(screen.queryByText(/"content"/)).toBeNull();
+    fireEvent.click(screen.getByText("Show input"));
+    expect(screen.getByText(/"content"/)).toBeTruthy();
+  });
+
   it("marks failures", () => {
     const { container } = render(<ToolCard item={{ ...item, isError: true, result: "Not run" }} />);
     expect(container.querySelector(".tool.error")).not.toBeNull();
