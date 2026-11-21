@@ -1,0 +1,185 @@
+/* Mini Harness redesign (direction A): tokens for ui/src/styles.css
+ *
+ * Replaces the two :root blocks at the top of styles.css. Every variable the
+ * current CSS uses is kept with the SAME MEANING, so existing rules keep
+ * working; new variables are marked NEW.
+ *
+ * Meaning changes to know about:
+ *   --bg      is now the outer frame (sidebar + gutter), not the chat background.
+ *             The chat sits on --panel inside a raised, rounded shell.
+ *   --sunken  is now the recessed layer (side panel, tool lists, inputs). The
+ *             sidebar moves from --sunken to --bg.
+ *   --accent-text keeps its meaning: text ON an accent fill. Accent-coloured
+ *             text on a normal background is the NEW --accent-ink.
+ *
+ * Contrast (WCAG 2.x, measured, not estimated):
+ *   - every text token on every surface it is used on: >= 4.5:1 in both themes
+ *     (lowest: --muted on --code-bg, 5.18 light / 4.86 dark)
+ *   - --field-line against every surface: >= 3:1 (lowest 3.24)
+ *   - --hl-*: comment, number, built-in and string were 3.0-4.5:1 on the new
+ *     light code background (and comment 4.04 in dark); the values below are
+ *     adjusted and all pass 4.5:1.
+ *
+ * No web fonts (CSP): system stacks only.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* surfaces, back to front */
+  --bg: #F4F4F5;
+  --panel: #FFFFFF;
+  --sunken: #F7F7F8;
+  --raised: #FFFFFF;          /* NEW: composer, menus, dialogs, inspector cards */
+  --hover: #F1F1F3;
+  --user: #F4F4F6;            /* user message card */
+  --code-bg: #EFEFF1;
+
+  /* lines */
+  --line: #E4E4E7;
+  --line-strong: #D9D9DE;     /* NEW */
+  --field-line: #86868E;      /* NEW: form field borders, 3:1 */
+
+  /* text */
+  --text: #18181B;
+  --text-2: #3F3F46;          /* NEW: secondary text, tool rows */
+  --muted: #63636C;
+
+  /* accent: focus ring, links, "waiting for you" */
+  --accent: #4F46E5;
+  --accent-soft: #EEF0FF;
+  --accent-text: #FFFFFF;     /* text on an --accent fill (unchanged meaning) */
+  --accent-ink: #3730A3;      /* NEW: accent-coloured text on --accent-soft or surfaces */
+
+  /* status (warn = Judge, bad = Allow) */
+  --ok: #166534;
+  --ok-soft: #DCFCE7;         /* NEW */
+  --warn: #92400E;
+  --warn-soft: #FEF3C7;       /* NEW */
+  --warn-line: #F5D08A;       /* NEW */
+  --bad: #B91C1C;
+  --bad-soft: #FEF2F2;        /* NEW */
+  --bad-line: #FCA5A5;        /* NEW */
+
+  /* diffs */
+  --add-bg: #DCFCE7;
+  --del-bg: #FEE2E2;
+
+  /* syntax */
+  --hl-keyword: #8E3FC4;
+  --hl-string: #276B3C;
+  --hl-comment: #63636C;
+  --hl-number: #9A5200;
+  --hl-title: #2F5FD0;
+  --hl-built: #7A5E00;
+
+  /* elevation */
+  --shadow: 0 12px 32px rgba(24, 24, 27, 0.14);
+  --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.06);
+  --scrim: rgba(24, 24, 27, 0.4);  /* NEW: behind dialogs and drawers */
+
+  /* NEW in phase 12: the design's greys and soft tints */
+  --text-3: #52525B;          /* third text tier: numbers, meta, descriptions */
+  --control: #F4F4F5;         /* neutral control and chip fill */
+  --control-line: #D9D9DE;
+  --line-mid: #E4E4E7;        /* tool lists, action blocks */
+  --inset: #FFFFFF;           /* the inset ring on a selected row or tab */
+  --footer: #FAFAFA;          /* dialog and composer footers */
+  --card: #FFFFFF;            /* cards in the side panel and sidebar */
+  --brand: #18181B;           /* the "H" tile and the primary button */
+  --warn-ink: #92400E;
+  --note-bg: #FFFBEB;  --note-line: #F5D08A;  --note-ink: #78350F;
+  --ok-line: #86EFAC;
+  --add-text: #166534;
+  --del-text: #991B1B;
+  --bad-ink: #991B1B;
+  --mark-bg: #FEF3C7;
+  --danger-fill: #B91C1C;
+  --accent-surface: #EEF0FF;  --accent-surface-line: #A5B4FC;
+
+  /* shape */
+  --radius: 10px;             /* shell, composer, menus */
+  --radius-sm: 6px;           /* buttons, inputs, rows */
+  --radius-card: 8px;         /* NEW: cards, tool groups */
+  --radius-dialog: 12px;      /* NEW */
+  --focus: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent);
+
+  /* type */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;   /* NEW */
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;                  /* NEW */
+  --fs-xs: 11px;  --fs-sm: 12px;  --fs-md: 13px;  --fs-lg: 15px;  --fs-title: 14px;  --fs-xl: 22px;     /* NEW */
+  --bar-h: 46px;              /* NEW: top bar and side-panel tab bar */
+
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --bg: #09090B;
+    --panel: #131316;
+    --sunken: #0F0F12;
+    --raised: #1A1A1F;
+    --hover: #1C1C21;
+    --user: #1A1A1F;
+    --code-bg: #1F1F24;
+
+    --line: #222227;
+    --line-strong: #2C2C33;
+    --field-line: #6A6A74;
+
+    --text: #EDEDF0;
+    --text-2: #C9C9CF;
+    --muted: #8B8B94;
+
+    --accent: #A5A6F6;
+    --accent-soft: #22223A;
+    --accent-text: #11111A;
+    --accent-ink: #C7C8FA;
+
+    --ok: #4CC38A;
+    --ok-soft: #15291F;
+    --warn: #F2C877;
+    --warn-soft: #2A2418;
+    --warn-line: #5A4520;
+    --bad: #F08A8A;
+    --bad-soft: #2A1616;
+    --bad-line: #4A2626;
+
+    --add-bg: #142A1E;
+    --del-bg: #2A1616;
+
+    --hl-keyword: #C792EA;
+    --hl-string: #A5D6A7;
+    --hl-comment: #8B8B94;
+    --hl-number: #E0A56C;
+    --hl-title: #82AAFF;
+    --hl-built: #E5C07B;
+
+    --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --scrim: rgba(5, 5, 7, 0.72);
+
+    --text-3: #A8A8B0;
+    --control: #222228;
+    --control-line: #2C2C33;
+    --line-mid: #24242A;
+    --inset: #2A2A31;
+    --footer: #151519;
+    --card: #17171B;
+    --brand: #E6E6E9;
+    --warn-ink: #F2D9A6;
+    --note-bg: #1F1C17;  --note-line: #3A3020;  --note-ink: #E6DCC8;
+    --ok-line: #1F4A33;
+    --add-text: #B8EBCD;
+    --del-text: #F5C2C2;
+    --bad-ink: #F5C2C2;
+    --mark-bg: #3A2E14;
+    --danger-fill: #B23B3B;
+    --accent-surface: #1A1A24;  --accent-surface-line: #34346A;
+  }
+}
