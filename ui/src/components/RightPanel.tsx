@@ -51,6 +51,8 @@ export function RightPanel() {
   const patch = useStore((s) => s.patch);
   if (!open) return null;
   return (
+    <>
+    <div className="backdrop right" onClick={() => patch({ rightOpen: false })} aria-hidden />
     <aside className="rightpanel" style={{ "--right-w": `${width}px` } as React.CSSProperties}>
       <div className={`resize ${drag ? "drag" : ""}`} onPointerDown={(e) => { e.preventDefault(); setDrag(true); }} role="separator" aria-orientation="vertical" aria-label="Resize panel" />
       <div className="tabs">
@@ -68,5 +70,6 @@ export function RightPanel() {
         {tab === "context" && <ContextPanel />}
       </div>
     </aside>
+    </>
   );
 }
