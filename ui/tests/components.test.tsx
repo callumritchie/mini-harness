@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Markdown } from "../src/components/Markdown";
 import { PermissionDialog } from "../src/components/PermissionDialog";
 import { AskCard } from "../src/components/AskCard";
 import { ToolCard } from "../src/components/ToolCard";
 import { DiffView } from "../src/components/DiffView";
+import { ConfirmAllow } from "../src/components/ConfirmAllow";
+import type { Info } from "../src/protocol";
 import { initialState, useStore } from "../src/store";
 
 afterEach(() => {
@@ -120,5 +122,36 @@ describe("DiffView", () => {
     expect(container.querySelectorAll(".row.add")).toHaveLength(1);
     expect(container.querySelectorAll(".row.del")).toHaveLength(1);
     expect(screen.getByText("modified")).toBeTruthy();
+  });
+});
+
+describe("Allow mode needs a confirmation", () => {
+  const info = { permissions: "ask", modes: ["ask", "judge", "allow"], mode_help: {} } as unknown as Info;
+
+  it("is only turned on by a click on Turn on Allow", () => {
+    const turnOn = vi.fn();
+    useStore.setState({ info, confirmAllow: true, confirmAllowMode: turnOn });
+    render(<ConfirmAllow />);
+    expect(document.activeElement).toBe(screen.getByText("Keep ask"));
+    fireEvent.click(screen.getByText("Turn on Allow"));
+    expect(turnOn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the old mode on Escape and on Enter", () => {
+    const turnOn = vi.fn();
+    useStore.setState({ info, confirmAllow: true, confirmAllowMode: turnOn });
+    render(<ConfirmAllow />);
+    fireEvent.keyDown(document.activeElement!, { key: "Enter" });
+    expect(useStore.getState().confirmAllow).toBe(false);
+    act(() => useStore.setState({ confirmAllow: true }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useStore.getState().confirmAllow).toBe(false);
+    expect(turnOn).not.toHaveBeenCalled();
+  });
+
+  it("is what /permissions allow opens", () => {
+    useStore.setState({ info });
+    useStore.getState().submit("/permissions allow");
+    expect(useStore.getState().confirmAllow).toBe(true);
   });
 });

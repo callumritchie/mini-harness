@@ -55,6 +55,7 @@ export interface ChatState {
   selectedChange: string | null;
   selectedFile: string | null;
   showGoal: boolean;
+  confirmAllow: boolean;
   draft: string | null; // text a starter button wants put in the message box
 }
 
@@ -79,6 +80,7 @@ export const initialState: ChatState = {
   selectedChange: null,
   selectedFile: null,
   showGoal: false,
+  confirmAllow: false,
   draft: null,
 };
 
@@ -224,6 +226,7 @@ interface Actions {
   answerAsk(answer: string | null): void;
   setModel(model: string): void;
   setMode(mode: Mode): void;
+  confirmAllowMode(): void;
   setEffort(effort: string | null): void;
   setLimit(limit: number): void;
   newSession(): void;
@@ -299,7 +302,15 @@ export const useStore = create<ChatState & Actions>((set, get) => {
       if (a && request({ type: "answer_ask", id: a.id, answer })) set({ ask: null });
     },
     setModel: (model) => void request({ type: "set_model", model }),
-    setMode: (mode) => void request({ type: "set_permissions", mode }),
+    setMode(mode) {
+      // Allow is never one step: the first request only opens the confirmation
+      if (mode === "allow" && get().info?.permissions !== "allow") return set({ confirmAllow: true });
+      void request({ type: "set_permissions", mode });
+    },
+    confirmAllowMode() {
+      set({ confirmAllow: false });
+      void request({ type: "set_permissions", mode: "allow" });
+    },
     setEffort: (effort) => void request({ type: "set_effort", effort }),
     setLimit: (limit) => void request({ type: "set_limit", limit }),
     newSession: () => void request({ type: "new_session" }),

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { api, getToken } from "./api";
 import { Chat } from "./components/Chat";
 import { Composer } from "./components/Composer";
+import { ConfirmAllow } from "./components/ConfirmAllow";
 import { GoalDialog } from "./components/GoalDialog";
 import { PermissionDialog } from "./components/PermissionDialog";
 import { RightPanel } from "./components/RightPanel";
@@ -21,6 +22,7 @@ async function refreshSessions() {
 
 export default function App() {
   const connected = useStore((s) => s.connected);
+  const allow = useStore((s) => s.info?.permissions === "allow");
   const token = getToken();
 
   useEffect(() => {
@@ -30,7 +32,11 @@ export default function App() {
     else if (window.innerWidth < 1100) patch({ rightOpen: false });
     const keys = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.key.toLowerCase() === "k") {
+      if (e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        const { running, newSession } = useStore.getState();
+        if (!running) newSession();
+      } else if (e.key.toLowerCase() === "k") {
         e.preventDefault();
         document.getElementById("composer")?.focus();
       } else if (e.key.toLowerCase() === "b") {
@@ -87,14 +93,17 @@ export default function App() {
   return (
     <div className="app">
       <Sidebar />
-      <main className="main">
-        <TopBar />
-        {!connected && <div className="banner">Disconnected from the server. Reconnecting…</div>}
-        <Chat />
-        <Composer />
-      </main>
-      <RightPanel />
+      <div className={allow ? "shell allow" : "shell"}>
+        <main className="main">
+          <TopBar />
+          {!connected && <div className="banner">Disconnected from the server. Reconnecting…</div>}
+          <Chat />
+          <Composer />
+        </main>
+        <RightPanel />
+      </div>
       <PermissionDialog />
+      <ConfirmAllow />
       <GoalDialog />
     </div>
   );

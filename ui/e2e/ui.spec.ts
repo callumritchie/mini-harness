@@ -92,8 +92,10 @@ test("the whole demo walk-through", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
 
   // settings and the context panel
-  await page.getByRole("button", { name: "judge" }).click();
-  await expect(page.getByRole("button", { name: "judge" })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: /Permission mode/ }).click();
+  await page.getByRole("menuitemradio", { name: /Judge/ }).click();
+  await expect(page.getByRole("button", { name: /Permission mode/ })).toContainText("Judge");
+  await expect(page.getByRole("button", { name: /Permission mode/ })).toHaveAccessibleName(/Judge/);
   await page.getByRole("tab", { name: "Context" }).click();
   await expect(page.getByText("Tool definitions")).toBeVisible();
   await page.screenshot({ path: shot("05-context") });

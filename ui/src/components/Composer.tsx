@@ -23,6 +23,8 @@ export function Composer() {
   const cancel = useStore((s) => s.cancel);
   const draft = useStore((s) => s.draft);
   const patch = useStore((s) => s.patch);
+  const allow = useStore((s) => s.info?.permissions === "allow");
+  const setMode = useStore((s) => s.setMode);
 
   useEffect(() => {
     if (draft === null) return;
@@ -50,6 +52,12 @@ export function Composer() {
 
   return (
     <div className="composer">
+      {allow && (
+        <div className="allow-strip" role="status">
+          <span><b>Allow is on:</b> nothing is asked. Commands run as you.</span>
+          <button onClick={() => setMode("ask")}>Switch to Ask</button>
+        </div>
+      )}
       {matches.length > 0 && (
         <ul className="palette" role="listbox">
           {matches.map((m, i) => (
