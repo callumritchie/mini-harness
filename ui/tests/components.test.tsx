@@ -183,6 +183,17 @@ describe("ToolCard for search_docs", () => {
     expect(container.querySelector(".source-score")?.getAttribute("title")).toContain("meaning (cosine similarity) 0.71");
   });
 
+  it("shows the section a passage starts in, and marks test files", () => {
+    const { container } = render(<ToolCard item={{ ...search, sources: [{ ...sources[1], heading: "Design › The frozen-prefix rule" },
+      { ...sources[0], path: "tests/test_rag.py", is_test: true }] }} />);
+    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
+    expect(container.querySelector(".source-heading")?.textContent).toBe("§ Design › The frozen-prefix rule");
+    expect(container.querySelectorAll(".source-heading")).toHaveLength(1); // no heading, nothing shown
+    const rows = [...container.querySelectorAll(".source")];
+    expect(rows[1].querySelector(".source-test")?.textContent).toBe("test");
+    expect(rows[0].querySelector(".source-test")).toBeNull();
+  });
+
   it("says a near-zero score is near zero instead of 0.00", () => {
     const { container } = render(<ToolCard item={{ ...search, sources: [{ ...sources[0], score: 0.000003 }] }} />);
     fireEvent.click(screen.getByText("search_docs(frozen prefix)"));

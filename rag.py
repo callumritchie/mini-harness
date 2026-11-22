@@ -7,20 +7,28 @@ content-addressed (`content_sha`), so what is built on top of it later (embeddin
 content and version, and a version change here rebuilds the index rather than mixing two ways of cutting.
 """
 import hashlib
+import re
 import sqlite3
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import embed
 import safety
 import sessionlog
 import tools
 
-SCHEMA_VERSION = "2"  # 2: embeddings and the knowledge graph (graph.py) live in the same file
-CHUNKER_VERSION = "lines-v1"  # bump when chunk_lines or CHUNK_DEFAULTS change: the index is rebuilt
+SCHEMA_VERSION = "3"  # 2: embeddings and the knowledge graph (graph.py) in the same file; 3: each passage's section heading
+CHUNKER_VERSION = "sections-v2"  # bump when the cutting changes: the index is rebuilt (the content-keyed caches are kept)
 PROSE = {".md", ".mdx", ".markdown", ".rst", ".txt", ".adoc"}
+MARKDOWN = {".md", ".mdx", ".markdown"}  # cut at headings, so a section starts its own passage
 CHUNK_DEFAULTS = {"code": (60, 10), "prose": (40, 8)}  # (lines per chunk, lines shared with the next one)
+HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")  # an ATX heading: `## Title`
+MAX_MERGED_LINES = 120  # overlapping or touching passages of one file are shown as one, up to this many lines
+TEST_WEIGHT = 0.6  # a passage from a test file counts this much in the ranking, unless the search is about tests
+TEST_DIRS = {"tests", "test", "__tests__", "e2e", "spec"}
+TEST_FILE = re.compile(r"^(test_.+\.py|.+_test\.(py|go)|conftest\.py|.+\.(test|spec)\.(js|jsx|ts|tsx|mjs|cjs))$")
+TEST_WORDS = {"test", "tests", "spec", "specs", "fixture", "fixtures", "e2e"}
 SKIP_DIRS = tools.SKIP_DIRS | {".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".next", ".cache", "dist", "build", "coverage"}
 MAX_FILE_BYTES = tools.MAX_GREP_FILE_BYTES
 MAX_FILES = tools.MAX_SEARCH_FILES
@@ -38,13 +46,17 @@ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL,
                                  indexed_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY, chunk_id TEXT NOT NULL UNIQUE, path TEXT NOT NULL,
-                                  start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, content TEXT NOT NULL, content_sha TEXT NOT NULL);
+                                  start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, content TEXT NOT NULL, content_sha TEXT NOT NULL,
+                                  heading TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);
 CREATE INDEX IF NOT EXISTS chunks_content_sha ON chunks(content_sha);
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(content, path, content='chunks', content_rowid='id',
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(content, path, heading, content='chunks', content_rowid='id',
                                                          tokenize='unicode61 remove_diacritics 2');
 CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
-  INSERT INTO chunks_fts(rowid, content, path) VALUES (new.id, new.content, new.path);
+  INSERT INTO chunks_fts(rowid, content, path, heading) VALUES (new.id, new.content, new.path, new.heading);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+  INSERT INTO chunks_fts(chunks_fts, rowid, content, path, heading) VALUES ('delete', old.id, old.content, old.path, old.heading);
 END;
 CREATE TABLE IF NOT EXISTS embeddings(content_sha TEXT NOT NULL, model TEXT NOT NULL, dim INTEGER NOT NULL, vector BLOB NOT NULL,
                                       PRIMARY KEY (content_sha, model));
@@ -73,9 +85,12 @@ CREATE TRIGGER IF NOT EXISTS chunks_ad_graph AFTER DELETE ON chunks BEGIN
   DELETE FROM graph_chunks WHERE chunk_id = old.chunk_id;
 END;
 """
-DROP = ("DROP TABLE IF EXISTS chunks_fts; DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS meta; "
-        "DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS entities_fts; DROP TABLE IF EXISTS entities; "
-        "DROP TABLE IF EXISTS extractions; DROP TABLE IF EXISTS mentions; DROP TABLE IF EXISTS edges; DROP TABLE IF EXISTS graph_chunks;")
+# What a new version throws away: everything derived from how files are cut. Not `embeddings` and `extractions`: they are keyed by
+# content (a passage's text, a file's bytes), so they stay right whatever the cutting, and they are the expensive part (minutes of
+# embedding; model reads that cost money).
+DROP_DERIVED = ("DROP TABLE IF EXISTS chunks_fts; DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS files; "
+                "DROP TABLE IF EXISTS entities_fts; DROP TABLE IF EXISTS entities; DROP TABLE IF EXISTS mentions; "
+                "DROP TABLE IF EXISTS edges; DROP TABLE IF EXISTS graph_chunks;")
 
 _fts5 = None
 
@@ -121,9 +136,89 @@ def chunk_lines(text, size, overlap):
     return out
 
 
+def markdown_scan(text):
+    """The headings of a Markdown text and the lines that are not prose: ([(line, level, title)], {line numbers in code fences or
+    front matter}). Only ATX headings (`## Title`) count; a `#` inside a ``` or ~~~ fence, or in leading YAML front matter, is not
+    one. Setext headings (a line underlined with === or ---) are not recognised."""
+    lines = text.splitlines()
+    headings, code, fenced = [], set(), False
+    front = bool(lines) and lines[0].strip() == "---"
+    for n, line in enumerate(lines, 1):
+        if front:
+            code.add(n)
+            if n > 1 and line.strip() in ("---", "..."):
+                front = False
+            continue
+        if line.lstrip().startswith(("```", "~~~")):
+            code.add(n)
+            fenced = not fenced
+            continue
+        if fenced:
+            code.add(n)
+            continue
+        m = HEADING.match(line)
+        if m:
+            headings.append((n, len(m.group(1)), m.group(2).strip()))
+    return headings, code
+
+
+def markdown_sections(text):
+    """The text as consecutive sections [(start_line, end_line, breadcrumb)], each starting at a heading (and one before the first
+    heading if there is text there). The breadcrumb names the section and the ones it sits in: `Web UI › Protocol`."""
+    lines = text.splitlines()
+    headings, _ = markdown_scan(text)
+    if not headings:
+        return [(1, len(lines), "")] if lines else []
+    out, stack = ([(1, headings[0][0] - 1, "")] if headings[0][0] > 1 else []), []
+    for i, (n, level, title) in enumerate(headings):
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        stack.append((level, title))
+        end = headings[i + 1][0] - 1 if i + 1 < len(headings) else len(lines)
+        out.append((n, end, " › ".join(t for _, t in stack)))
+    return out
+
+
+def chunk_markdown(text, size, overlap):
+    """Passages that start at headings: (start_line, end_line, text, breadcrumb). Whole sections are packed together while the
+    passage stays within `size` lines; a longer section is cut into overlapping windows inside itself, never across a heading.
+    So a heading always arrives with the text under it."""
+    lines = text.splitlines()
+    out, pack = [], None  # pack: [start, end, breadcrumb] of sections waiting to become one passage
+
+    def flush():
+        if pack:
+            body = "\n".join(lines[pack[0] - 1:pack[1]])
+            if body.strip():
+                out.append((pack[0], pack[1], body, pack[2]))
+
+    for start, end, crumb in markdown_sections(text):
+        if end - start + 1 > size:
+            flush()
+            pack = None
+            out += [(start + s - 1, start + e - 1, body, crumb) for s, e, body in chunk_lines("\n".join(lines[start - 1:end]), size, overlap)]
+        elif pack and end - pack[0] + 1 <= size:
+            pack[1] = end
+        else:
+            flush()
+            pack = [start, end, crumb]
+    flush()
+    return out
+
+
 def chunks_for(path, text):
-    size, overlap = CHUNK_DEFAULTS["prose" if Path(path).suffix.lower() in PROSE else "code"]
-    return chunk_lines(text, size, overlap)
+    """A file's passages: (start_line, end_line, text, heading). Markdown is cut at its headings; everything else into windows."""
+    suffix = Path(path).suffix.lower()
+    size, overlap = CHUNK_DEFAULTS["prose" if suffix in PROSE else "code"]
+    if suffix in MARKDOWN:
+        return chunk_markdown(text, size, overlap)
+    return [(s, e, body, "") for s, e, body in chunk_lines(text, size, overlap)]
+
+
+def is_test_path(path):
+    """Is this a test file (in a tests/ folder, or named like test_x.py, x_test.go, x.test.ts, x.spec.tsx, conftest.py)?"""
+    p = PurePosixPath(path)
+    return any(part.lower() in TEST_DIRS for part in p.parts[:-1]) or bool(TEST_FILE.match(p.name.lower()))
 
 
 def query_terms(query):
@@ -185,11 +280,13 @@ class Index:
         with self.schema_lock:
             if self.schema_ready:
                 return
-            c.executescript(SCHEMA)
-            meta = dict(c.execute("SELECT key, value FROM meta"))
+            # read the versions before creating anything: an older file's tables have older shapes
+            has_meta = c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").fetchone()
+            meta = dict(c.execute("SELECT key, value FROM meta")) if has_meta else {}
             if meta and (meta.get("schema") != SCHEMA_VERSION or meta.get("chunker") != CHUNKER_VERSION):
-                c.executescript(DROP + SCHEMA)  # made by another version: start again rather than mix the two
+                c.executescript(DROP_DERIVED)  # made by another version: cut again rather than mix the two (caches kept)
                 meta = {}
+            c.executescript(SCHEMA)
             if not meta:
                 c.executemany("INSERT OR REPLACE INTO meta VALUES (?, ?)", [("schema", SCHEMA_VERSION), ("chunker", CHUNKER_VERSION)])
             self.schema_ready = True
@@ -269,8 +366,9 @@ class Index:
             stats["unchanged"] += 1
             return
         c.execute("DELETE FROM chunks WHERE path = ?", (rel,))
-        c.executemany("INSERT INTO chunks(chunk_id, path, start_line, end_line, content, content_sha) VALUES (?, ?, ?, ?, ?, ?)",
-                      [(sha256(f"{rel}\n{start}\n{body}")[:16], rel, start, end, body, sha256(body)) for start, end, body in chunks_for(rel, text)])
+        c.executemany("INSERT INTO chunks(chunk_id, path, start_line, end_line, content, content_sha, heading) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                      [(sha256(f"{rel}\n{start}\n{body}")[:16], rel, start, end, body, sha256(body), heading)
+                       for start, end, body, heading in chunks_for(rel, text)])
         c.execute("INSERT OR REPLACE INTO files VALUES (?, ?, ?, ?, ?)", (rel, st.st_mtime_ns, st.st_size, digest, time.time()))
         stats["updated" if old else "added"] += 1
 
@@ -433,13 +531,15 @@ class Index:
         return self.query(query, top_k, path_prefix, mode, embedder)[0]
 
     def query(self, query, top_k=5, path_prefix=None, mode="hybrid", embedder=None):
-        """The best passages for a query, best first, and the mode actually used. Each hit is {chunk_id, path, start_line, end_line,
-        score, match, bm25, cosine, snippet}:
+        """The best passages for a query, best first, and the mode actually used. Each hit is {chunk_id, chunk_ids, path, start_line,
+        end_line, heading, score, match, bm25, cosine, is_test, snippet}:
         - keyword: BM25 over the words (FTS5); meaning: cosine between the query's and the passages' vectors (needs `embedder`
           and passages it has embedded); hybrid: both lists fused by reciprocal rank, so neither score has to be calibrated.
         - score is the fused rank, 0-1 (1: first in every list used); match says which lists found it; bm25 and cosine are the
           raw scores (None where that list did not find it). Without vectors, hybrid and meaning fall back to keyword.
-        - Overlapping chunks of the same file are shown once. `path_prefix` is a path inside the project ('' or '.' for all)."""
+        - A heading match counts double (the heading column); a test file's passage counts TEST_WEIGHT unless the search is about
+          tests; passages of one file that overlap or touch are merged into one (up to MAX_MERGED_LINES lines), so a heading never
+          arrives without its text. `path_prefix` is a path inside the project ('' or '.' for all)."""
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
         if self.last_sync is None or time.time() - self.last_sync > RESYNC_SECONDS:
@@ -470,23 +570,36 @@ class Index:
                 hit["bm25" if name == "keyword" else "cosine"] = float(f"{raw:.4g}")
                 hit["found"].append(name)
         best = len(lists) / (RRF_K + 1)
-        order = sorted(fused, key=lambda r: (-fused[r]["rrf"], r))
+        ids = list(fused)
         rows = {r[0]: r[1:] for r in c.execute(
-            f"SELECT id, chunk_id, path, start_line, end_line, content FROM chunks WHERE id IN ({','.join('?' * len(order))})", order)} if order else {}
-        hits, taken = [], {}
+            f"SELECT id, chunk_id, path, start_line, end_line, content, heading FROM chunks WHERE id IN ({','.join('?' * len(ids))})", ids)} if ids else {}
+        # a test file's passage counts less, so sample text in tests does not crowd out the docs and code, unless the search is
+        # about tests (the words, or a test folder as the prefix)
+        about_tests = bool(TEST_WORDS & set(query_terms(query))) or bool(prefix and is_test_path(prefix + "/x"))
+        for rowid, f in fused.items():
+            f["test"] = rowid in rows and is_test_path(rows[rowid][1])
+            f["weighted"] = f["rrf"] * (TEST_WEIGHT if f["test"] and not about_tests else 1.0)
+        order = sorted((r for r in fused if r in rows), key=lambda r: (-fused[r]["weighted"], r))  # gone since: a sync ran
+        hits = []
         for rowid in order:
-            if rowid not in rows:
-                continue  # removed by a sync since the lists were made
-            chunk_id, path, start, end, content = rows[rowid]
-            if any(start <= e and s <= end for s, e in taken.get(path, [])):
-                continue  # overlaps a better chunk of the same file
-            taken.setdefault(path, []).append((start, end))
+            chunk_id, path, start, end, content, heading = rows[rowid]
             f = fused[rowid]
-            hits.append({"chunk_id": chunk_id, "path": path, "start_line": start, "end_line": end, "score": round(f["rrf"] / best, 3),
-                         "match": "both" if len(f["found"]) == 2 else f["found"][0], "bm25": f["bm25"], "cosine": f["cosine"],
-                         "snippet": content[:MAX_SNIPPET_CHARS]})
+            near = next((h for h in hits if h["path"] == path and start <= h["end_line"] + 1 and h["start_line"] <= end + 1), None)
+            if near is not None:  # overlaps or touches a better passage of the same file: one longer passage, not a lost one
+                if max(end, near["end_line"]) - min(start, near["start_line"]) + 1 <= MAX_MERGED_LINES:
+                    _merge(near, start, content, chunk_id, f)
+                continue
+            hits.append({"chunk_id": chunk_id, "chunk_ids": [chunk_id], "path": path, "start_line": start, "end_line": end,
+                         "heading": heading, "score": round(f["weighted"] / best, 3), "match": None, "found": set(f["found"]),
+                         "bm25": f["bm25"], "cosine": f["cosine"], "is_test": f["test"],
+                         "_lines": dict(enumerate(content.split("\n"), start))})
             if len(hits) == top_k:
                 break
+        for h in hits:
+            lines = h.pop("_lines")
+            h["snippet"] = "\n".join(lines[n] for n in range(h["start_line"], h["end_line"] + 1) if n in lines)[:MAX_SNIPPET_CHARS]
+            found = h.pop("found")
+            h["match"] = "both" if len(found) == 2 else next(iter(found))
         return hits, used
 
     def _keyword(self, query, prefix, limit):
@@ -495,7 +608,7 @@ class Index:
         if not terms:
             return []
         match = " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
-        sql = ("SELECT c.id, bm25(chunks_fts, 1.0, 0.5) AS rank FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid "
+        sql = ("SELECT c.id, bm25(chunks_fts, 1.0, 0.5, 2.0) AS rank FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid "
                "WHERE chunks_fts MATCH ?")
         params = [match]
         if prefix:
@@ -519,6 +632,19 @@ class Index:
         q = embedder.embed([query], query=True)[0]
         floor = getattr(embedder, "min_similarity", 0.0)
         return [(ids[keep[i]], sim) for i, sim in embed.top_k_cosine(q, matrix, limit) if sim >= floor]
+
+
+def _merge(hit, start, content, chunk_id, f):
+    """Fold a lower-ranked passage into a hit it overlaps or touches: the range grows to cover both, the lines are the union (both
+    are windows of the same file version), and it keeps the better score and every ranking that found either."""
+    for n, line in enumerate(content.split("\n"), start):
+        hit["_lines"].setdefault(n, line)
+    hit["start_line"], hit["end_line"] = min(hit["_lines"]), max(hit["_lines"])
+    hit["chunk_ids"].append(chunk_id)
+    hit["found"] |= set(f["found"])
+    for key in ("bm25", "cosine"):
+        if f[key] is not None and (hit[key] is None or f[key] > hit[key]):
+            hit[key] = f[key]
 
 
 _indexes = {}

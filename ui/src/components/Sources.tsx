@@ -34,7 +34,11 @@ export function Sources({ sources }: { sources: Source[] }) {
                 <Icon name={expanded ? "chevron-down" : "chevron-right"} size={12} />
               </button>
               <span className="source-rank">{i + 1}</span>
-              <button className="source-where" onClick={() => show(s)} title={`Open ${where} in Files`}>{where}</button>
+              <span className="source-label">
+                <button className="source-where" onClick={() => show(s)} title={`Open ${where} in Files`}>{where}</button>
+                {s.heading && <span className="source-heading" title={s.heading}>§ {s.heading}</span>}
+              </span>
+              {s.is_test && <span className="chip source-test" title="From a test file: ranked lower, because tests often repeat words as sample text">test</span>}
               {s.match && s.match !== "keyword" && <span className={`chip source-match ${s.match}`}>{s.match === "both" ? "words + meaning" : "meaning"}</span>}
               <span className="source-score" title={scoreTitle(s)}>
                 <span className="source-bar" aria-hidden><span style={{ width: `${Math.round(Math.max(share, 0.04) * 100)}%` }} /></span>

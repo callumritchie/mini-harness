@@ -20,7 +20,7 @@ from pathlib import Path, PurePosixPath
 import pricing
 import rag
 
-STRUCTURE = "structure-v1"
+STRUCTURE = "structure-v2"  # v2: Markdown read by rag.markdown_scan (front matter is not headings)
 LLM = "llm-v1"
 PROSE = rag.PROSE
 CODE_KINDS = ("module", "class", "function", "symbol")
@@ -161,28 +161,25 @@ def _dedupe(edges):
 
 # ---------- structure-v1: Markdown ----------
 
-HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)")
 TICKED = re.compile(r"`([A-Za-z_][A-Za-z0-9_.]{2,80})`")
 
 
 def extract_markdown(rel, text, exists):
     """Sections (and which contains which), relative links to files in the project, and `backticked` names to resolve against
-    code entities later. `exists(rel_path)` says whether a linked file is in the project."""
+    code entities later. `exists(rel_path)` says whether a linked file is in the project. Headings, code fences and front matter
+    are found by rag.markdown_scan, the same reading the index cuts passages by."""
     doc_key = f"file:{rel}".lower()
     entities = [{"key": doc_key, "name": rel, "kind": "document", "line": 1}]
     edges, mentions = [], []
     stack = []  # (level, key)
-    fenced = False
+    headings, code = rag.markdown_scan(text)
+    headings = {n: (level, title) for n, level, title in headings}
     for n, line in enumerate(text.splitlines(), 1):
-        if line.lstrip().startswith(("```", "~~~")):
-            fenced = not fenced
+        if n in code:
             continue
-        if fenced:
-            continue
-        m = HEADING.match(line)
-        if m:
-            level, title = len(m.group(1)), m.group(2).strip()
+        if n in headings:
+            level, title = headings[n]
             key = f"section:{rel}#{norm(title)}"
             while stack and stack[-1][0] >= level:
                 stack.pop()
@@ -287,6 +284,7 @@ def _tidy(c):
     """A document's `Name` that pointed at code which no longer exists points at nothing: drop that edge, then every entity
     nothing refers to any more."""
     c.execute("DELETE FROM edges WHERE relation = 'mentions' AND extractor = ? AND dst NOT IN (SELECT entity_id FROM mentions)", (STRUCTURE,))
+    c.execute("DELETE FROM extractions WHERE extractor LIKE 'structure-%' AND extractor != ?", (STRUCTURE,))  # an older reading: free to redo
     c.execute("DELETE FROM entities WHERE id NOT IN (SELECT entity_id FROM mentions) AND id NOT IN (SELECT src FROM edges) "
               "AND id NOT IN (SELECT dst FROM edges)")
 

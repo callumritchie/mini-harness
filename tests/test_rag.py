@@ -65,6 +65,81 @@ def test_prose_and_code_get_their_own_sizes():
     assert prose[0][1] == rag.CHUNK_DEFAULTS["prose"][0] and code[0][1] == rag.CHUNK_DEFAULTS["code"][0]
 
 
+def md_doc(sections):
+    """Markdown from [(heading or None, body lines)]."""
+    out = []
+    for heading, n in sections:
+        if heading:
+            out.append(heading)
+        out += [f"text {len(out) + 1}" for _ in range(n)]
+    return "\n".join(out) + "\n"
+
+
+def test_markdown_passages_start_at_headings():
+    text = md_doc([(None, 3)] + [(f"## Part {i}", 12) for i in range(6)])
+    lines = text.splitlines()
+    chunks = rag.chunk_markdown(text, 40, 8)
+    for s, e, body, crumb in chunks:
+        assert body == "\n".join(lines[s - 1:e])  # exact lines, exact numbers
+        assert lines[s - 1].startswith("## ") or s == 1  # every passage starts at a heading (or the text before the first)
+        inner = [l for l in lines[s:e] if l.startswith("## ")]
+        assert all(lines.index(l) + 1 < e for l in inner)  # whole sections packed: no section is cut
+    assert len(chunks) == 3  # 3 + 6×13 lines packed into passages of at most 40, not 7
+    assert [c[3] for c in chunks] == ["", "Part 2", "Part 5"]
+
+
+def test_long_sections_are_windowed_inside_themselves_with_a_breadcrumb():
+    text = md_doc([("# Guide", 2), ("## Install", 90), ("### Linux", 5)])
+    lines = text.splitlines()
+    chunks = rag.chunk_markdown(text, 40, 8)
+    install = [c for c in chunks if c[3] == "Guide › Install"]
+    assert len(install) == 3 and install[0][0] == 4 and all(b[0] - a[1] == -7 for a, b in zip(install, install[1:]))  # 8 lines shared
+    assert install[-1][1] == lines.index("### Linux")  # the last window ends before the next heading: never across it
+    assert chunks[-1][3] == "Guide › Install › Linux" and chunks[-1][0] == lines.index("### Linux") + 1
+    assert chunks[0][:2] == (1, 3) and chunks[0][3] == "Guide"  # a short section on its own when the next does not fit
+
+
+def test_markdown_code_fences_front_matter_and_plain_files():
+    text = "---\ntitle: x\n# not a heading\n---\nIntro\n```\n# a comment\n```\n~~~\n## also code\n~~~\n## Real\nbody\n"
+    headings, code = rag.markdown_scan(text)
+    assert headings == [(12, 2, "Real")] and {1, 2, 3, 4, 6, 7, 8, 9, 10, 11} <= code
+    assert [c[:2] + (c[3],) for c in rag.chunk_markdown(text, 40, 8)] == [(1, 13, "")]  # all fits in one passage, from the top
+    plain = "\n".join(f"line {i}" for i in range(100))
+    assert [c[:3] for c in rag.chunk_markdown(plain, 40, 8)] == rag.chunk_lines(plain, 40, 8)  # no headings: plain windows
+    assert [c[3] for c in rag.chunks_for("a.txt", "# not markdown\nx")] == [""] and rag.chunks_for("a.py", "x")[0][3] == ""
+
+
+def test_markdown_chunking_covers_every_line_exactly():
+    import random
+    rnd = random.Random(7)
+    for _ in range(200):
+        out = []
+        for _ in range(rnd.randint(0, 12)):
+            kind = rnd.random()
+            if kind < 0.35:
+                out.append("#" * rnd.randint(1, 4) + f" H{len(out)}")
+            elif kind < 0.45:
+                out += ["```", "# inside", "```"]
+            out += [rnd.choice(["", "words here", "more words"]) for _ in range(rnd.randint(0, 50))]
+        text = "\n".join(out)
+        lines = text.splitlines()
+        chunks = rag.chunk_markdown(text, 40, 8)
+        covered = set()
+        for s, e, body, _ in chunks:
+            assert 1 <= s <= e <= len(lines) and body == "\n".join(lines[s - 1:e])
+            covered |= set(range(s, e + 1))
+        assert all(n in covered for n, l in enumerate(lines, 1) if l.strip()), text
+        assert [c[0] for c in chunks] == sorted(c[0] for c in chunks)
+
+
+def test_is_test_path():
+    for p in ["tests/x.py", "pkg/tests/data.md", "test_x.py", "a/x_test.go", "x_test.py", "ui/x.test.tsx", "x.spec.ts",
+              "src/__tests__/a.js", "ui/e2e/ui.spec.ts", "e2e/flow.ts", "conftest.py", "spec/a.rb"]:
+        assert rag.is_test_path(p), p
+    for p in ["latest.md", "contest.py", "attestation.md", "testing.md", "src/protest.ts", "docs/TESTS.txt.md", "test.py"]:
+        assert not rag.is_test_path(p), p
+
+
 def test_queries_become_plain_words():
     assert rag.query_terms('Frozen "prefix" AND NEAR(x*) -cache: run_task frozen') == ["frozen", "prefix", "and", "near", "x", "cache", "run_task"]
     assert rag.query_terms("!!! ***") == []
@@ -172,7 +247,9 @@ def test_the_relevant_file_ranks_first():
     hits = index.search("frozen prefix cache", top_k=3)
     assert hits[0]["path"] == "docs/cache.md" and hits[0]["start_line"] == 1 and hits[0]["end_line"] == 2
     assert [h["score"] for h in hits] == sorted((h["score"] for h in hits), reverse=True) and all(h["score"] >= 0 for h in hits)
-    assert set(hits[0]) == {"chunk_id", "path", "start_line", "end_line", "score", "match", "bm25", "cosine", "snippet"} and len(hits[0]["chunk_id"]) == 16
+    assert set(hits[0]) == {"chunk_id", "chunk_ids", "path", "start_line", "end_line", "heading", "score", "match", "bm25", "cosine",
+                            "is_test", "snippet"} and len(hits[0]["chunk_id"]) == 16
+    assert hits[0]["heading"] == "Prompt cache" and hits[0]["is_test"] is False and hits[0]["chunk_ids"] == [hits[0]["chunk_id"]]
     assert hits[0]["score"] == 1.0 and hits[0]["match"] == "keyword" and hits[0]["cosine"] is None and hits[0]["bm25"] > 0
     assert len(index.search("frozen prefix cache", top_k=1)) == 1
     assert [h["path"] for h in index.search("frozen", path_prefix="src")] == ["src/app.py"]
@@ -200,6 +277,143 @@ def test_a_search_sees_files_changed_by_other_means():
     (root / "b.py").write_text("brand new\n")  # e.g. written by a bash command
     index.last_sync -= rag.RESYNC_SECONDS + 1
     assert [h["path"] for h in index.search("brand")] == ["b.py"]
+
+
+# ---------- the reported bug, merging, and test files ----------
+
+def test_heading_at_a_window_edge_keeps_its_section():
+    """What happened on this repo: `## The frozen-prefix rule` was the last line of one 40-line window, that window won, the window
+    holding the section overlapped it and was dropped, and tests using "frozen prefix" as sample text ranked above the docs."""
+    before = md_doc([("# Design", 3), ("## Sessions", 34)])
+    assert len(before.splitlines()) == 39  # the heading lands on line 40: where a blind 40-line window used to end
+    body = ["Never change what was already sent to the model. New information goes at the end."] + [f"detail {i}" for i in range(29)]
+    doc = before + "## The frozen-prefix rule\n" + "\n".join(body) + "\n## Compaction\nsummaries\n"
+    root, index = project({
+        "DESIGN.md": doc,
+        "tests/test_sample.py": "def test_search():\n    index.search('frozen prefix rule')\n    assert 'frozen prefix' in out\n",
+        "ui/tests/x.test.tsx": "it('finds the frozen prefix rule', () => search('frozen prefix rule'));\n",
+    })
+    hits = index.search("frozen prefix rule")
+    top = hits[0]
+    assert top["path"] == "DESIGN.md" and top["start_line"] == 40 and top["heading"] == "Design › The frozen-prefix rule", hits
+    assert "Never change what was already sent" in top["snippet"] and top["snippet"].startswith("## The frozen-prefix rule")
+    assert {h["path"] for h in hits[1:]} == {"tests/test_sample.py", "ui/tests/x.test.tsx"} and all(h["is_test"] for h in hits[1:])
+
+
+def test_overlapping_passages_are_merged_not_lost():
+    words = [f"filler line {i}" for i in range(200)]
+    words[45] = "the needle appears here"  # in the overlap of windows 1-60 and 51-110 (code: 60 lines, 10 shared)
+    words[55] = "needle again, just past it"
+    root, index = project({"big.py": "\n".join(words) + "\n", "other.py": "needle elsewhere\n"})
+    lines = (root / "big.py").read_text().splitlines()
+    hits = index.search("needle", top_k=3)
+    big = [h for h in hits if h["path"] == "big.py"]
+    assert len(big) == 1 and len(hits) == 2  # one merged passage for big.py, and other.py still gets its place
+    h = big[0]
+    assert (h["start_line"], h["end_line"]) == (1, 110) and len(h["chunk_ids"]) == 2
+    assert h["snippet"] == "\n".join(lines[0:110])  # exactly the file's lines, no repeats from the overlap
+
+
+def test_merging_stops_at_the_cap_and_leaves_separate_passages_alone():
+    words = [f"filler {i}" for i in range(400)]
+    for n in (5, 55, 105, 155, 205):  # a needle in every 50 lines: a chain of overlapping windows
+        words[n] = "needle"
+    words[390] = "needle far away"
+    root, index = project({"long.py": "\n".join(words) + "\n"})
+    hits = index.search("needle", top_k=5)
+    assert all(h["end_line"] - h["start_line"] + 1 <= rag.MAX_MERGED_LINES for h in hits)
+    assert any(h["start_line"] > 300 for h in hits)  # the far passage is its own hit
+    spans = sorted((h["start_line"], h["end_line"]) for h in hits)
+    assert all(a[1] < b[0] for a, b in zip(spans, spans[1:]))  # nothing shown twice
+
+
+def test_merged_match_says_both_lists_found_it():
+    import embed
+    words = [f"filler {i}" for i in range(70)]  # windows 1-60 and 51-70
+    words[4] = "warm cache"   # by words (window 1-60 only)
+    words[64] = "memo hot"    # only by meaning (window 51-70 only)
+    root, index = project({"m.py": "\n".join(words) + "\n"})
+    index.sync()
+    e = embed.HashEmbedder(synonyms=SYN)
+    index.embed_pending(e)
+    assert [h["match"] for h in index.search("memo hot", mode="meaning", embedder=e)][:1] == ["meaning"]
+    hits = index.search("warm cache", embedder=e)
+    assert len(hits) == 1, hits  # the keyword window and the meaning-only window overlap: one passage
+    h = hits[0]
+    assert h["match"] == "both" and (h["start_line"], h["end_line"]) == (1, 70) and len(h["chunk_ids"]) == 2
+    assert h["bm25"] is not None and h["cosine"] is not None
+
+
+def test_tests_rank_below_docs_unless_the_search_is_about_tests():
+    same = "The retry budget doubles after each failure.\n"
+    root, index = project({"docs/retry.md": same, "tests/test_retry.py": same, "src/retry_test.go": same})
+    assert index.search("retry budget")[0]["path"] == "docs/retry.md"
+    assert [h["is_test"] for h in index.search("retry budget")] == [False, True, True]
+    about = index.search("retry budget test")  # asked about tests: no penalty, so the test files score like the doc
+    assert {h["path"] for h in about} == {"docs/retry.md", "tests/test_retry.py", "src/retry_test.go"}
+    weighted = {h["path"]: h["score"] for h in index.search("retry budget")}
+    plain = {h["path"]: h["score"] for h in about}
+    assert plain["tests/test_retry.py"] > weighted["tests/test_retry.py"] and plain["docs/retry.md"] >= weighted["docs/retry.md"] * 0.9
+    assert [h["path"] for h in index.search("retry budget", path_prefix="tests")] == ["tests/test_retry.py"]
+    root, index = project({"tests/only.py": "unique_marker_word\n", "README.md": "nothing\n"})
+    assert [h["path"] for h in index.search("unique_marker_word")] == ["tests/only.py"]  # still found when it is all there is
+
+
+def test_a_version_change_keeps_the_expensive_caches():
+    import embed
+    import graph
+    root, index = project({"a.md": "# A\nThe session log keeps the prompt cache warm.\n", "b.md": "# B\nOther text.\n"})
+    index.sync()
+    e = embed.HashEmbedder()
+    assert index.embed_pending(e)["embedded"] == 2
+    c = index.conn()
+    c.execute("INSERT INTO extractions VALUES ('sha-of-some-passage', 'llm-v1', '{}')")  # a paid model read
+    vectors = c.execute("SELECT count(*) FROM embeddings").fetchone()[0]
+    c.execute("UPDATE meta SET value = 'older' WHERE key = 'chunker'")
+    fresh = rag.Index(root, index.db)
+    fc = fresh.conn()
+    assert fresh.counts()["chunks"] == 0  # the cutting is redone...
+    assert fc.execute("SELECT count(*) FROM embeddings").fetchone()[0] == vectors  # ...but the vectors stay
+    assert fc.execute("SELECT count(*) FROM extractions WHERE extractor = 'llm-v1'").fetchone()[0] == 1  # and the paid reads
+    fresh.sync()
+    calls = e.calls
+    assert fresh.embed_pending(e)["embedded"] == 0 and e.calls == calls  # same passages: nothing embedded again
+    assert graph.estimate(fresh)["passages"] == 2  # (the fake extraction above is for other text)
+
+
+def test_an_old_schema_file_upgrades():
+    root = Path(tempfile.mkdtemp()).resolve()
+    (root / "a.md").write_text("# Title\nhello world\n")
+    db = rag.index_path(root)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db) as c:  # the shape version 2 left behind: no heading column, a two-column FTS table
+        c.executescript("""
+            CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta VALUES ('schema', '2'), ('chunker', 'lines-v1');
+            CREATE TABLE files(path TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER, sha256 TEXT, indexed_at REAL);
+            CREATE TABLE chunks(id INTEGER PRIMARY KEY, chunk_id TEXT UNIQUE, path TEXT, start_line INTEGER, end_line INTEGER,
+                                content TEXT, content_sha TEXT);
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(content, path, content='chunks', content_rowid='id');
+            CREATE TABLE embeddings(content_sha TEXT, model TEXT, dim INTEGER, vector BLOB, PRIMARY KEY (content_sha, model));
+        """)
+        kept = rag.sha256("# Title\nhello world")  # a vector for text the new cutting still produces
+        c.execute("INSERT INTO embeddings VALUES (?, 'm', 1, x'00000000')", (kept,))
+    index = rag.Index(root, db)
+    hits = index.search("hello")
+    assert hits[0]["heading"] == "Title" and hits[0]["snippet"] == "# Title\nhello world"
+    assert index.conn().execute("SELECT count(*) FROM embeddings WHERE content_sha = ?", (kept,)).fetchone()[0] == 1
+
+
+def test_deleted_passages_leave_nothing_in_the_word_index():
+    root, index = project({"a.md": "# A\nzebra crossing\n"})
+    index.search("zebra")
+    p = root / "a.md"
+    for i in range(3):  # re-cut the file a few times: the old passages must not still match
+        touch_later(p, f"# A\nversion {i}\n")
+        index.sync()
+    assert index.search("zebra") == []
+    fts = index.conn().execute("SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH 'zebra'").fetchone()[0]
+    assert fts == 0
 
 
 # ---------- embeddings and hybrid search ----------

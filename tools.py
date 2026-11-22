@@ -636,7 +636,9 @@ def search_docs(a, session):
     for h in hits:
         body = "\n".join(f"{i:>6}\t{line[:MAX_LINE_CHARS]}" for i, line in enumerate(h["snippet"].split("\n"), h["start_line"]))
         found = f", {h['match']}" if used == "hybrid" else ""
-        part = f"{h['path']}:{h['start_line']}-{h['end_line']}  (score {h['score']:.2f}{found})\n{body}"
+        section = f"  § {h['heading']}" if h.get("heading") else ""
+        part = (f"{h['path']}:{h['start_line']}-{h['end_line']}{section}  (score {h['score']:.2f}{found})"
+                + ("  [test file]" if h.get("is_test") else "") + f"\n{body}")
         if shown and size + len(part) > MAX_TOOL_OUTPUT - 1000:
             break
         shown.append(h)

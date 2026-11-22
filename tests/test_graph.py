@@ -103,6 +103,19 @@ def test_markdown_structure():
     assert ("Storage", "links_to", "pkg/base.py") in e and not any(d == "docs/nope.md" for _, _, d in e)  # only files that exist
     assert ("Storage", "mentions", "pkg.app.Store") in e and ("Details", "mentions", "pkg.app.load") in e
     assert "not a heading" not in kinds(index)  # inside a code fence
+    root, index = project({"fm.md": "---\ntitle: x\n# yaml comment\n---\n# Real\ntext\n"})
+    graph.build_structure(index)
+    assert "Real" in kinds(index) and "yaml comment" not in kinds(index)  # front matter is not headings (the same reading as the index)
+
+
+def test_an_older_structure_reading_is_redone():
+    root, index = project({"a.py": "def f():\n    pass\n"})
+    c = index.conn()
+    sha = c.execute("SELECT sha256 FROM files").fetchone()[0]
+    c.execute("INSERT INTO extractions VALUES (?, 'structure-v0', '{\"entities\": [], \"edges\": []}')", (sha,))
+    graph.build_structure(index)
+    assert [r[0] for r in c.execute("SELECT extractor FROM extractions")] == [graph.STRUCTURE]
+    assert ("a", "defines", "a.f") in edges(index)
 
 
 def test_facts_cite_the_passage_that_holds_them():

@@ -224,6 +224,14 @@ def test_happy_paths():
         out, err = p.run("explore_graph", name="zebra"); assert not err and out.startswith("Nothing in the graph") and "search_docs" in out
         out, err = p.run("search_docs", query="hello", path_prefix="sub"); assert not err and "sub/b.txt" in out and "a.py" not in out
         out, err = p.run("search_docs", query="zebra"); assert not err and out.startswith("No passages") and "grep" in out
+        (p.dir / "guide.md").write_text("# Guide\nintro\n## Setup\nrun the installer\n")
+        (p.dir / "tests").mkdir()
+        (p.dir / "tests" / "test_setup.py").write_text("installer = 'run the installer'\n")
+        import rag
+        rag.get(p.dir).sync()  # written by the test itself, inside the 2-second re-check window
+        out, err = p.run("search_docs", query="run the installer")
+        first, rest = out.split("\n\n", 2)[1], out.split("\n\n", 2)[2]
+        assert first.startswith("guide.md:1-4  § Guide  (score") and "tests/test_setup.py:1-1  (score" in rest and "[test file]" in rest, out
 
 
 def test_every_failure_says_what_to_do_next():

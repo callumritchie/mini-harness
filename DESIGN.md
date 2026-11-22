@@ -409,15 +409,26 @@ answers how things connect, from a knowledge graph over the same passages. `rag.
 
 - **Where.** `~/.mini-harness/index/<project path with / as ->/rag.sqlite`, next to the session logs and never inside the project.
 - **Schema.** `files(path, mtime_ns, size, sha256, indexed_at)`, `chunks(id, chunk_id, path, start_line, end_line, content,
-  content_sha)` and `chunks_fts`, an FTS5 table over `chunks(content, path)` kept in step by triggers. `meta` records
-  `SCHEMA_VERSION` and `CHUNKER_VERSION`; an index made by another version is dropped and built again, never mixed.
+  content_sha, heading)` and `chunks_fts`, an FTS5 table over `chunks(content, path, heading)` kept in step by insert and delete
+  triggers (a test checks that a re-cut file leaves nothing behind in it). `meta` records `SCHEMA_VERSION` and `CHUNKER_VERSION`;
+  an index made by another version is cut again, never mixed, but only the derived tables are dropped: `embeddings` and
+  `extractions` are keyed by content, stay valid, and are the expensive part (minutes of embedding, paid model reads).
 - **Content-addressed** (the convention from `dynamic-workflows-experiment/evidence-graph`): `chunk_id` is a short sha256 of path,
   start line and text, and `content_sha` is the text's own hash. Whatever is built on the chunks next (embeddings, an entity
   graph) is keyed by `content_sha` and its own version, so an unchanged passage is never embedded or extracted twice, and a
   changed one is.
-- **Chunking.** Windows of lines with exact 1-based line numbers: 60 lines sharing 10 with the next for code, 40 sharing 8 for
-  prose (`.md`, `.rst`, `.txt`, ...). Blank windows are dropped and the last one is never repeated. A search shows each stretch of a
-  file once: an overlapping, lower-ranked chunk of the same file is skipped.
+- **Chunking.** Exact 1-based line numbers. Markdown is cut at its headings (`rag.markdown_scan`: ATX headings outside code
+  fences and front matter, the same reading the graph uses): whole sections are packed into one passage while it stays within
+  40 lines, and a longer section is cut into 40-line windows sharing 8, inside the section only, so a heading always arrives
+  with the text under it. Each passage records the breadcrumb of the section it starts in (`Web UI › Protocol`), indexed as its
+  own column that counts double. Other files: windows of 60 lines sharing 10 for code, 40 sharing 8 for other prose. Blank
+  passages are dropped. (Why: blind windows once put `## The frozen-prefix rule` on the last line of one window, that window
+  won, and the window holding the section was dropped as an overlap; the regression test rebuilds that case.)
+- **Ranking.** Passages of one file that overlap or touch are merged into one hit (union of the lines, best score, every
+  ranking that found either), up to 120 lines, instead of the weaker one being dropped. A test file's passage (`tests/`,
+  `__tests__/`, `e2e/`, `test_*.py`, `*_test.go`, `*.test.ts`, `*.spec.tsx`, `conftest.py`, ...) counts 0.6 unless the query is
+  about tests (`test`, `spec`, `fixture`, `e2e`) or the folder searched is a test folder, so sample strings in tests do not crowd
+  out the docs; hits say `is_test`, and a test that is the only match is still returned.
 - **Incremental.** A sync walks the files the way `grep` does; a file with the same `(mtime_ns, size)` is skipped, one with a
   new stamp but the same sha256 only gets its stamp refreshed, a changed one is cut again, and a deleted one is purged. It runs in
   the background when a front end starts, after every write the agent makes (the `on_change` hook; skipped if a sync is
