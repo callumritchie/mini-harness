@@ -110,7 +110,7 @@ class WebUI(UI):
             group = self.groups.get(call_id)
         self.emit("tool_call", id=call_id, name=name, input=clean(args), display=safety.visible(display, limit=300), parallel_group=group)
 
-    def tool_result(self, call_id, name, text, is_error):
+    def tool_result(self, call_id, name, text, is_error, sources=None):
         with self.lock:
             _, args = self.calls.pop(call_id, (name, {}))
             self.groups.pop(call_id, None)
@@ -118,7 +118,8 @@ class WebUI(UI):
         approval = ctl.permissions.approvals.pop(call_id, None) if ctl is not None and getattr(ctl, "permissions", None) else None
         mcp = bool(ctl is not None and ctl.mcp is not None and ctl.mcp.owns(name))
         self.emit("tool_result", id=call_id, name=name, text=clean(text, tools.MAX_TOOL_OUTPUT), is_error=bool(is_error),
-                  outcome=tools.outcome(name, args, text, is_error), approval=approval, mcp=mcp)
+                  outcome=tools.outcome(name, args, text, is_error), approval=approval, mcp=mcp,
+                  **({"sources": clean(sources, MAX_STRING)} if sources else {}))
 
     def event(self, kind, data, text):
         """Goal and subagent progress as structured events (the browser builds its cards from them); the text is not sent."""
@@ -262,15 +263,15 @@ def create_app(controller, webui, token, port, dev_origins=()):
         path = next((s["path"] for s in sessionlog.list_sessions(Path.cwd(), limit=500, include=controller.include_path()) if s["id"] == session_id), None)
         if path is None:
             raise HTTPException(404, "no such session")
-        if session_id == controller.session.id:
-            messages = controller.session.messages
-        else:
-            events, _ = sessionlog.load(path)
-            messages = sessionlog.replay(events)["messages"]
+        events, _ = sessionlog.load(path)  # also for the current session: the sources a search found are only in the log
+        messages = controller.session.messages if session_id == controller.session.id else sessionlog.replay(events)["messages"]
+        sources = sessionlog.tool_sources(events)
         items = sessionlog.render_messages(messages)
-        for item in items:  # the same short outcome a live tool row gets, so a reloaded page reads the same
+        for item in items:  # the same short outcome and sources a live tool row gets, so a reloaded page reads the same
             if item.get("kind") == "tool" and item.get("result") is not None:
                 item["outcome"] = tools.outcome(item.get("name"), item.get("input") or {}, item["result"], item.get("is_error"))
+            if item.get("kind") == "tool" and item.get("id") in sources:
+                item["sources"] = sources[item["id"]]
         return clean(items, 20000)
 
     @app.get("/api/session/{session_id}")
@@ -333,6 +334,13 @@ def create_app(controller, webui, token, port, dev_origins=()):
             webui.emit("error", message=str(e))
         webui.emit("info", info=controller.info())
 
+    def do_index(rebuild):
+        try:
+            webui.emit("notice", text=controller.reindex(rebuild))
+        except Exception as e:  # noqa: BLE001
+            webui.emit("error", message=str(e))
+        webui.emit("info", info=controller.info())
+
     def load_session():
         webui.changes.clear()
         webui.emit("session_loaded", items=transcript_for(controller.session.id) if controller.session.messages else [], info=controller.info())
@@ -385,6 +393,8 @@ def create_app(controller, webui, token, port, dev_origins=()):
             if busy:
                 return webui.emit("error", message="A task is running. Stop it first.")
             run_in_thread(do_compact, msg.get("focus") if isinstance(msg.get("focus"), str) else None)
+        elif kind == "index":  # allowed while a task runs: the index has its own lock, and searches never wait for a sync
+            run_in_thread(do_index, msg.get("rebuild") is True)
         else:
             webui.emit("error", message=f"Unknown request '{kind}'.")
 

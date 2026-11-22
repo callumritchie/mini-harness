@@ -16,6 +16,7 @@ Keywords for reviewing every state (used by the screenshot test; they are not in
   fail              edit_file on a file that was not read first (an error with advice)
   cut               a reply that stops at the maximum length
   edit              reads README.md, then edits a line of it (a diff with a removal, additions and context)
+  search            search_docs over the demo folder (ranked passages that open in the Files tab)
   anything else     echoes your message
 """
 import itertools
@@ -91,6 +92,8 @@ def script(messages):
             return [_text(f"That didn't run:\n\n> {content[:300]}\n\nNothing was changed.")], "end_turn"
         if "Created" in content or "Overwrote" in content:
             return [_text("I wrote `demo.py`. Open the **Changes** tab to see the diff. Say `delete it` to try the approval dialog.")], "end_turn"
+        if " passage" in content.split("\n", 1)[0] and "search" in _last_typed(messages).lower():
+            return [_text("I found those passages in the index. Open one from the card to see it in the **Files** tab.")], "end_turn"
         if "answered" in content:
             choice = content.split("answered:", 1)[-1].strip()
             return [_text(f"You picked **{choice}**. I'd write hello world in {choice} next (the demo stops here).")], "end_turn"
@@ -108,6 +111,8 @@ def script(messages):
         return [_text(CUT)], "max_tokens"
     if "edit" in t:
         return [_text("I'll read the README first, then edit it."), _tool("read_file", path="README.md")], "tool_use"
+    if "search" in t:
+        return [_text("I'll search the project's index."), _tool("search_docs", query="demo folder throwaway")], "tool_use"
     if any(w in t for w in ("delete", "remove", "rm ")):
         return [_text("I'll delete it with a shell command, which needs your approval."), _tool("bash", command="rm demo.py")], "tool_use"
     if any(w in t for w in ("create", "write", "make a file")):

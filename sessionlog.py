@@ -173,6 +173,11 @@ def replay(events):
     return s
 
 
+def tool_sources(events):
+    """The structured sources saved with tool results (search_docs), by tool call id, for redrawing a conversation."""
+    return {e["tool_use_id"]: e["sources"] for e in events if e.get("type") == "tool_result" and e.get("sources")}
+
+
 def _add_cost(totals, event):
     """Add one event's saved cost to the totals. A call with no price counts as unpriced, never as $0."""
     c = event.get("cost")

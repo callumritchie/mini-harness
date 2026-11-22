@@ -89,12 +89,14 @@ def test_numbers_in_manuals_match_the_code():
     assert f"{tools.SUBAGENT_RESULT_CHARS:,}" in d["subagent"]
     assert all(n in d["subagent"] for n in tools.SUBAGENT_TOOLS)
     assert tools.SPECS["ask_user"]["input_schema"]["properties"]["choices"]["maxItems"] == 10
+    k = tools.SPECS["search_docs"]["input_schema"]["properties"]["top_k"]
+    assert k["maximum"] == tools.MAX_SEARCH_RESULTS and str(tools.MAX_SEARCH_RESULTS) in d["search_docs"] and str(tools.DEFAULT_SEARCH_RESULTS) in k["description"]
 
 
 def test_read_only_tools_are_documented_as_free_and_others_are_not():
     for t in tools.TOOLS:
         free = "no approval needed" in t["description"]
-        assert free == (t["name"] in {"glob", "grep"}) or t["name"] == "read_file", t["name"]
+        assert free == (t["name"] in {"glob", "grep", "search_docs"}) or t["name"] == "read_file", t["name"]
 
 
 # ---------- input schemas ----------
@@ -215,6 +217,10 @@ def test_happy_paths():
         out, err = p.run("grep", pattern="hello", glob="*.py"); assert "No matches" in out and not err
         out, err = p.run("bash", command="echo hi"); assert not err and "exit code: 0" in out and "hi" in out
         out, err = p.run("ask_user", question="Which?", choices=["a", "b"]); assert not err and "Nobody can answer" in out
+        out, err = p.run("search_docs", query="def two"); assert not err and out.startswith("1 passage for") and "a.py:1-5" in out and "     4\tdef two():" in out
+        assert tools.take_sources()[0]["path"] == "a.py" and tools.take_sources() is None  # taken once
+        out, err = p.run("search_docs", query="hello", path_prefix="sub"); assert not err and "sub/b.txt" in out and "a.py" not in out
+        out, err = p.run("search_docs", query="zebra"); assert not err and out.startswith("No passages") and "grep" in out
 
 
 def test_every_failure_says_what_to_do_next():
@@ -234,6 +240,8 @@ def test_every_failure_says_what_to_do_next():
             ("grep", dict(pattern="("), "Escape"),
             ("grep", dict(pattern="x", path="missing"), "glob"),
             ("subagent", dict(task="count"), "read_file"),
+            ("search_docs", dict(query="x", path_prefix="missing"), "glob"),
+            ("search_docs", dict(query="x", path_prefix="/"), "grep"),
         ]
         for name, args, hint in cases:
             out, err = p.run(name, **args)
@@ -256,6 +264,7 @@ def test_every_failure_says_what_to_do_next():
 def test_secrets_are_never_searched():
     with Project() as p:
         out, err = p.run("grep", pattern="API_KEY"); assert "abc" not in out and ".env" in out and "tell the user" in out
+        out, err = p.run("search_docs", query="API_KEY abc"); assert "API_KEY=abc" not in out and ".env" not in out and out.startswith("No passages")
 
 
 def test_long_output_is_cut_with_advice():
@@ -271,6 +280,8 @@ def test_permissions_agree_with_the_manuals():
         # the manuals say these run without asking inside the project
         assert not risky("read_file", path="a.py") and not risky("grep", pattern="x") and not risky("glob", pattern="*")
         assert not risky("subagent", task="t") and not risky("ask_user", question="q")
+        assert not risky("search_docs", query="x") and not risky("search_docs", query="x", path_prefix="sub")
+        assert risky("search_docs", query="x‮")  # hidden characters still come to the user
         # and these are shown to the user
         assert risky("write_file", path="/etc/hosts", content="x") and risky("write_file", path="run.sh", content="x")
         assert risky("bash", command="rm a.py") and risky("read_file", path=".env")
@@ -279,7 +290,8 @@ def test_permissions_agree_with_the_manuals():
 def test_describe_call_is_one_short_safe_line():
     for name, args in [("bash", {"command": "echo \x1b[2J\nx"}), ("read_file", {"path": "a"}), ("grep", {"pattern": "p"}),
                        ("glob", {"pattern": "*"}), ("ask_user", {"question": "q?"}), ("subagent", {"task": "t"}),
-                       ("edit_file", {"path": "a", "old_string": "o" * 500, "new_string": "n"}), ("write_file", {"path": "a", "content": "c"})]:
+                       ("edit_file", {"path": "a", "old_string": "o" * 500, "new_string": "n"}), ("write_file", {"path": "a", "content": "c"}),
+                       ("search_docs", {"query": "frozen\nprefix", "top_k": 3})]:
         line = tools.describe_call(name, args)
         assert line.startswith(name + "(") and "\x1b" not in line and "\n" not in line and len(line) < 300, line
 
@@ -296,6 +308,9 @@ def test_outcome_says_how_a_call_went_from_our_own_result_text():
     assert o("grep", {}, "No matches for 'x' in the files that can be searched.", False) == "no matches"
     assert o("ask_user", {}, "The user answered: Go", False) == "answered: Go"
     assert o("edit_file", {}, "Edited", False) is None and o("read_file", {}, "nope", True) is None
+    assert o("search_docs", {}, "5 passages for 'x' (index: 9 files, ranked by keyword match):", False) == "5 passages"
+    assert o("search_docs", {}, "1 passage for 'x' (index", False) == "1 passage"
+    assert o("search_docs", {}, "No passages match 'x' in the index", False) == "no matches"
 
 
 def test_a_front_end_that_does_not_know_an_event_shows_its_text():

@@ -398,6 +398,47 @@ search with them, not with `grep`, `find` or `ls -R` through `bash` (those ask).
   subfolder as `path`, or a `glob` filter.
 - Outside the project, searching asks like any other read.
 
+## Document index (`search_docs`)
+
+`grep` finds text you can name exactly. `search_docs(query, top_k?, path_prefix?)` finds where a *topic* is covered when the
+model does not know the file or the wording: the project's text files are cut into passages and kept in a full-text index, and a
+search returns the best passages as `path:start-end (score)` with the lines themselves. It is lexical (SQLite FTS5, ranked by
+BM25), standard library only, so it works on every supported Python with no key. `rag.py` holds all of it.
+
+- **Where.** `~/.mini-harness/index/<project path with / as ->/rag.sqlite`, next to the session logs and never inside the project.
+- **Schema.** `files(path, mtime_ns, size, sha256, indexed_at)`, `chunks(id, chunk_id, path, start_line, end_line, content,
+  content_sha)` and `chunks_fts`, an FTS5 table over `chunks(content, path)` kept in step by triggers. `meta` records
+  `SCHEMA_VERSION` and `CHUNKER_VERSION`; an index made by another version is dropped and built again, never mixed.
+- **Content-addressed** (the convention from `dynamic-workflows-experiment/evidence-graph`): `chunk_id` is a short sha256 of path,
+  start line and text, and `content_sha` is the text's own hash. Whatever is built on the chunks next (embeddings, an entity
+  graph) is keyed by `content_sha` and its own version, so an unchanged passage is never embedded or extracted twice, and a
+  changed one is.
+- **Chunking.** Windows of lines with exact 1-based line numbers: 60 lines sharing 10 with the next for code, 40 sharing 8 for
+  prose (`.md`, `.rst`, `.txt`, ...). Blank windows are dropped and the last one is never repeated. A search shows each stretch of a
+  file once: an overlapping, lower-ranked chunk of the same file is skipped.
+- **Incremental.** A sync walks the files the way `grep` does; a file with the same `(mtime_ns, size)` is skipped, one with a
+  new stamp but the same sha256 only gets its stamp refreshed, a changed one is cut again, and a deleted one is purged. It runs in
+  the background when a front end starts, after every write the agent makes (the `on_change` hook; skipped if a sync is
+  already running), before a search (at most every 2 seconds, so changes made by `bash` are seen too), and on `/index`
+  (`--rebuild` builds it from nothing). Headless runs build it on the first search.
+- **Never indexed:** secret-looking files (`safety.is_secret`, on the path and on where a symlink leads), `.git`, `node_modules`,
+  virtualenvs, caches and `dist`/`build`, symlinks leading out of the project, binary and non-UTF-8 files, files over 2 MB,
+  minified files (average line over 500 characters), and more than 20,000 files.
+- **Threads.** Parallel subagents search at once: each thread has its own connection, writes are serialised by a lock, and WAL
+  lets reads continue during a write. A search never waits for a sync, except the very first one on an empty index.
+- **Queries** are reduced to words and quoted (`"frozen" OR "prefix"`), so nothing typed is FTS5 syntax.
+- **Sources for the UI.** The model gets text. The structured passages (`chunk_id, path, start_line, end_line, score,
+  snippet`) go to front ends by a side channel: `search_docs` leaves them in a thread-local that `agent_loop` collects with
+  `tools.take_sources()` right after the call, and passes on as `on_result(..., sources=...)` and in the log's `tool_result`
+  event. `sessionlog.replay` only copies `tool_use_id`, `content` and `is_error`, so they never reach the model; the web UI
+  draws them as ranked rows (a bar relative to the best hit, the passage on request, a link that opens the Files viewer at
+  those lines), live and after a reload.
+- It is read-only and free inside the project like `grep` (a hidden character in the query still asks), and subagents have it.
+  A passage found does not count as reading the file: `edit_file` still needs `read_file` first.
+
+Next, on the same store: an `embeddings(content_sha, model, vector)` table for hybrid (BM25 + dense) ranking, and
+entity/relationship tables that point at `chunk_id`s for graph lookups.
+
 ## Asking the user
 
 `ask_user(question, choices?)` puts one question to the person. In chat it prints the question and a numbered list

@@ -29,6 +29,27 @@ export interface Info {
   cost: CostSummary;
   turns: number;
   compactions: number;
+  index?: IndexStatus;
+}
+
+/** The document index behind search_docs, as the server reports it. */
+export interface IndexStatus {
+  available: boolean;
+  files?: number;
+  chunks?: number;
+  last_sync?: number | null;
+  building?: boolean;
+  error?: string;
+}
+
+/** One passage search_docs found: where it is, how well it matched (only comparable within one search), and its text. */
+export interface Source {
+  chunk_id: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  score: number;
+  snippet: string;
 }
 
 export interface Usage {
@@ -57,6 +78,7 @@ export type ServerEvent =
       text: string;
       is_error: boolean;
       outcome?: string | null; // a few words on how it went ("612 lines", "exit 1"), made by the server
+      sources?: Source[]; // search_docs: the passages it found, best first (the text says the same for the model)
       approval?: Approval | null; // who decided a risky call; null when nothing was asked
       mcp?: boolean; // the result came from an MCP server (its first line says so)
     }
@@ -101,7 +123,7 @@ export type TranscriptItem =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
   | { kind: "summary"; text: string }
-  | { kind: "tool"; id: string; name: string; input: Record<string, unknown>; result: string | null; is_error: boolean; outcome?: string | null };
+  | { kind: "tool"; id: string; name: string; input: Record<string, unknown>; result: string | null; is_error: boolean; outcome?: string | null; sources?: Source[] };
 
 export type ClientRequest =
   | { type: "send"; text: string }
@@ -115,6 +137,7 @@ export type ClientRequest =
   | { type: "new_session" }
   | { type: "resume"; ref: string }
   | { type: "compact"; focus?: string }
+  | { type: "index"; rebuild?: boolean }
   | { type: "goal"; text: string; verify?: string; max_turns?: number };
 
 export interface SessionRow {

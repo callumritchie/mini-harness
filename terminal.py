@@ -161,6 +161,7 @@ class Chat:
             "/context             what fills the context window, and what the session has cost",
             "/compact [focus]     replace the conversation with a summary now",
             "/limit [tokens]      show or set where automatic compaction starts",
+            "/index [--rebuild]   bring the document index (search_docs) up to date now, or build it again",
             "/goal [--verify CMD] [--max-turns N] TEXT   work unattended until done, with evidence, your check and a review",
             "/help                this list",
             "/exit                quit (Ctrl-D too)"]))
@@ -246,6 +247,12 @@ class Chat:
 
     def cmd_compact(self, arg):
         self.ctl.compact(arg)
+
+    def cmd_index(self, arg):
+        if arg not in ("", "--rebuild"):
+            print("Usage: /index, or /index --rebuild to build it again from nothing.")
+            return
+        print(self.ctl.reindex(rebuild=arg == "--rebuild"))
 
     def cmd_goal(self, arg):
         try:

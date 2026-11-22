@@ -20,4 +20,4 @@ mini-harness = "agent:main"
 
 [tool.setuptools]
 py-modules = ["agent", "compaction", "context", "controller", "demo", "goal", "judge", "mcp", "permissions", "pricing",
-              "safety", "session", "sessionlog", "skills", "terminal", "tools", "webserver"]
+              "rag", "safety", "session", "sessionlog", "skills", "terminal", "tools", "webserver"]

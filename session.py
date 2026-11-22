@@ -123,9 +123,10 @@ class Session:
         self.emit({"type": "assistant", "model": model, "stop_reason": stop_reason, "usage": usage, "cost": {"usd": self.last_cost, "model": model},
                    "content": [sessionlog.block_to_json(b) for b in blocks]})
 
-    def log_tool_result(self, result):
-        """Saved the moment the tool finishes, one event each, so a crash mid-batch keeps the finished ones."""
-        self.emit({"type": "tool_result", **result})
+    def log_tool_result(self, result, sources=None):
+        """Saved the moment the tool finishes, one event each, so a crash mid-batch keeps the finished ones. `sources` (search_docs)
+        is kept in the log for front ends; replay never puts it back into what the model is sent."""
+        self.emit({"type": "tool_result", **result, **({"sources": sources} if sources else {})})
 
     def add_tool_results(self, results):
         self.messages.append({"role": "user", "content": results})  # all results of one reply travel in one message

@@ -21,6 +21,7 @@ jobs:
       - run: python tests/test_loop.py
       - run: python tests/test_tools.py
       - run: python tests/test_server.py
+      - run: python tests/test_rag.py
 
   ui:
     runs-on: ubuntu-latest

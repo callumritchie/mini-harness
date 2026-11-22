@@ -145,6 +145,51 @@ describe("ToolCard", () => {
   });
 });
 
+describe("ToolCard for search_docs", () => {
+  const sources = [
+    { chunk_id: "c2", path: "src/app.py", start_line: 1, end_line: 2, score: 0.8, snippet: "def frozen():\n    pass" },
+    { chunk_id: "c1", path: "docs/cache.md", start_line: 10, end_line: 49, score: 3.2, snippet: "The frozen <b>prefix</b> rule." },
+  ];
+  const search = { kind: "tool" as const, id: "s", name: "search_docs", display: "search_docs(frozen prefix)", input: { query: "frozen prefix" },
+    result: "2 passages for 'frozen prefix' (index: 4 files, ranked by keyword match):\n\ndocs/cache.md:10-49 ...", isError: false, status: "done" as const, outcome: "2 passages", sources };
+
+  it("lists the passages best first, with a bar scaled to the best one", () => {
+    const { container } = render(<ToolCard item={search} />);
+    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
+    const rows = [...container.querySelectorAll(".source-where")].map((b) => b.textContent);
+    expect(rows).toEqual(["docs/cache.md:10–49", "src/app.py:1–2"]);
+    const bars = [...container.querySelectorAll<HTMLElement>(".source-bar > span")].map((b) => b.style.width);
+    expect(bars).toEqual(["100%", "25%"]);
+    expect(container.querySelector(".tool-out")).toBeNull(); // the passages replace the text written for the model
+    expect(screen.getByText("Copy output")).toBeTruthy();
+  });
+
+  it("shows a snippet as text on request, and opens a passage at its lines in Files", () => {
+    const { container } = render(<ToolCard item={search} />);
+    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
+    expect(container.querySelector(".source-snippet")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Show the passage docs/cache.md:10–49"));
+    expect(container.querySelector(".source-snippet")?.textContent).toBe("The frozen <b>prefix</b> rule.");
+    expect(container.querySelector(".source-snippet b")).toBeNull();
+    fireEvent.click(screen.getByText("src/app.py:1–2"));
+    expect(useStore.getState()).toMatchObject({ rightTab: "files", rightOpen: true, selectedFile: "src/app.py", selectedRange: { start: 1, end: 2 } });
+  });
+
+  it("says a near-zero score is near zero instead of 0.00", () => {
+    const { container } = render(<ToolCard item={{ ...search, sources: [{ ...sources[0], score: 0.000003 }] }} />);
+    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
+    expect(container.querySelector(".source-num")?.textContent).toBe("<0.01");
+    expect(container.querySelector(".source-score")?.getAttribute("title")).toContain("almost every passage");
+  });
+
+  it("falls back to the plain result without sources", () => {
+    const { container } = render(<ToolCard item={{ ...search, sources: undefined, result: "No passages match 'zebra' in the index (4 files)." }} />);
+    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
+    expect(container.querySelector(".sources")).toBeNull();
+    expect(container.querySelector(".tool-out")?.textContent).toContain("No passages match");
+  });
+});
+
 describe("DiffView", () => {
   it("shows additions and removals with counts", () => {
     const { container } = render(<DiffView path="a.py" before={"x = 1\n"} after={"x = 2\n"} />);

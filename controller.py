@@ -14,6 +14,7 @@ import agent
 import compaction
 import context
 import pricing
+import rag
 import sessionlog
 import skills
 import tools
@@ -26,7 +27,7 @@ class UI:
 
     def text(self, delta): pass  # a piece of the model's reply, as it streams
     def tool_call(self, call_id, name, args, display): pass  # a tool is about to run
-    def tool_result(self, call_id, name, text, is_error): pass
+    def tool_result(self, call_id, name, text, is_error, sources=None): pass  # sources: search_docs' ranked passages, structured
     def usage(self, usage, cost, summary): pass  # tokens and cost of one call; summary = (total usd, complete, note)
     def notice(self, text): pass  # compaction, the judge, subagent activity, goal progress...
     def change(self, path, before, after): pass  # a file was written or edited (before is None for a new file)
@@ -76,7 +77,20 @@ class Controller:
         self.permissions.say = self.ui.notice
         self.mcp = agent.start_mcp_and_skills(self.args)
         self.session.ask_human = self.ui.ask_user
+        self._index_in_background()
         return self.info()
+
+    def _index_in_background(self):
+        """Bring the document index up to date without holding anything up: search_docs waits for it only on its first call."""
+        if not rag.available():
+            return
+
+        def go():
+            try:
+                rag.get(Path.cwd()).sync()
+            except Exception as e:  # noqa: BLE001 - search_docs tries again on its own; the person should still know
+                self.ui.notice(f"The document index could not be updated: {e}")
+        threading.Thread(target=go, daemon=True).start()
 
     @property
     def limit(self):
@@ -92,6 +106,7 @@ class Controller:
             "agents_md": context.AGENTS_FILE in s.system_parts, "skills": [x["name"] for x in skills.discover(Path.cwd())[0]],
             "mcp_tools": sorted(self.mcp.tools) if self.mcp else [], "price_known": pricing.prices(self.model) is not None,
             "cost": {"usd": usd, "complete": complete, "note": note}, "turns": s.totals["calls"], "compactions": s.compactions,
+            "index": rag.status(Path.cwd()),
         }
 
     def _bind(self, session):
@@ -105,12 +120,21 @@ class Controller:
         settings = dict(
             on_text=self.ui.text, on_tool=lambda name, args: None,
             on_call=lambda cid, name, args: self.ui.tool_call(cid, name, args, tools.describe_call(name, args)),
-            on_result=self.ui.tool_result, on_change=self.ui.change, cancel=self.cancel, say=self.ui.notice,
+            on_result=self.ui.tool_result, on_change=self._changed, cancel=self.cancel, say=self.ui.notice,
             on_usage=lambda u, usd: self.ui.usage(u, usd, s.cost_summary()), event=self.ui.event, on_parallel=self.ui.parallel,
             limits=Limits(s, max_turns=self.args.max_turns or agent.MAX_STEPS, max_cost=self.args.max_cost),
         )
         settings.update(overrides)
         return agent.make_run(self.client, self.provider, self.model, self.args, self.permissions, self.mcp, s, **settings)
+
+    def _changed(self, path, before, after):
+        """The agent wrote a file: show it, and re-index it now (if a sync is running, that sync or the next search sees it)."""
+        self.ui.change(path, before, after)
+        if rag.available():
+            try:
+                rag.get(Path.cwd()).update_paths([path])
+            except Exception:  # noqa: BLE001 - the index is a convenience; it must never break a write
+                pass
 
     def _guard(self, fn):
         """Run `fn` (which returns a TaskResult) and turn every way it can end into a TaskResult. Only one at a time."""
@@ -218,6 +242,14 @@ class Controller:
         self._bind(session)
         self.model, self.provider, self.client, self.client_error = model, agent.provider_for(model), client, None
         return session.resume_report
+
+    # ---------- the document index ----------
+
+    def reindex(self, rebuild=False):
+        """/index: bring the document index up to date now (rebuild: from nothing). Returns a line for the person."""
+        if not rag.available():
+            raise UserError("The document index needs SQLite with full-text search (FTS5), and this Python's SQLite does not have it.")
+        return rag.describe(rag.get(Path.cwd()).sync(rebuild=rebuild, cancel=None))
 
     # ---------- context and compaction ----------
 

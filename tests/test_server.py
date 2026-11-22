@@ -98,6 +98,20 @@ with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
     assert (project / "demo.py").exists()
     changes = client.get("/api/changes", headers=H).json(); assert changes[0]["path"] == "demo.py" and changes[0]["before"] is None and "def greet" in changes[0]["after"]
 
+    # a search gives the browser structured sources (the file just written is already in the index); a reload keeps them
+    ws.send_json({"type": "send", "text": "search"})
+    ev = collect(ws, "done"); t = types(ev)
+    res = next(e for e in ev if e["type"] == "tool_result")
+    assert res["name"] == "search_docs" and not res["is_error"] and res["outcome"].endswith(("passage", "passages")), res
+    src = res["sources"][0]; assert src["path"] == "demo.py" and src["start_line"] == 1 and "def greet" in src["snippet"] and src["score"] >= 0
+    assert all(s["path"] != ".env" for s in res["sources"]) and "sk-live" not in str(res)
+    items = client.get(f"/api/session/{ctl.session.id}", headers=H).json()["items"]
+    assert next(i for i in items if i["kind"] == "tool" and i["id"] == res["id"])["sources"] == res["sources"]
+    assert all("sources" not in b for m in ctl.session.messages if isinstance(m["content"], list) for b in m["content"] if isinstance(b, dict))
+    ws.send_json({"type": "index", "rebuild": True})
+    ev = collect(ws, "info")
+    assert any(e["type"] == "notice" and e["text"].startswith("Index updated:") for e in ev) and ev[-1]["info"]["index"]["files"] >= 2
+
     # a delete asks, with the exact command; deny keeps the file, allow removes it
     ws.send_json({"type": "send", "text": "delete it"})
     ev = collect(ws, "permission_request"); req = ev[-1]

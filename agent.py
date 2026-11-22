@@ -357,11 +357,11 @@ def agent_loop(run, session):
             if run.on_call:
                 run.on_call(use.id, use.name, use.input)
 
-        def finish(use, out, is_error):
+        def finish(use, out, is_error, sources=None):
             result = {"type": "tool_result", "tool_use_id": use.id, "content": out, "is_error": is_error}
-            session.log_tool_result(result)  # saved now, not after the whole batch
-            if run.on_result:
-                run.on_result(use.id, use.name, out, is_error)
+            session.log_tool_result(result, sources=sources)  # saved now, not after the whole batch
+            if run.on_result:  # sources (search_docs) go to front ends only; the model gets the text
+                run.on_result(use.id, use.name, out, is_error, **({"sources": sources} if sources else {}))
             results.append(result)
 
         for group in tool_groups(tool_uses, reply.stop_reason != "max_tokens"):
@@ -376,15 +376,17 @@ def agent_loop(run, session):
             use = group[0]
             check_cancel(run)
             announce(use)
+            sources = None
             if reply.stop_reason == "max_tokens":  # the tool input may be cut off, so do not run it
                 out, is_error = "Your reply hit the token limit, so this call was not run. Try a smaller step.", True
             else:
                 _worker.call_id = use.id  # a subagent started by this call reports its steps against it
                 try:
                     out, is_error = execute(run, session, use)
+                    sources = tools.take_sources()
                 finally:
                     _worker.call_id = None
-            finish(use, out, is_error)
+            finish(use, out, is_error, sources)
         session.add_tool_results(results)
     raise NotFinished(f"Stopped after {MAX_STEPS} model calls in one task without finishing.")
 

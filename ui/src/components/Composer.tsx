@@ -7,6 +7,7 @@ const COMMANDS: { cmd: string; help: string }[] = [
   { cmd: "/goal", help: "work unattended until done" },
   { cmd: "/compact", help: "replace the conversation with a summary" },
   { cmd: "/context", help: "what fills the context window" },
+  { cmd: "/index", help: "update the document index (--rebuild to start over)" },
   { cmd: "/model ", help: "switch model" },
   { cmd: "/permissions ", help: "ask | judge | allow" },
   { cmd: "/effort ", help: "low … max, or default" },

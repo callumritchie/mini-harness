@@ -132,6 +132,22 @@ describe("structured events from the server", () => {
     expect(s.items[0]).toMatchObject({ group: "t1", index: 1, steps: ["read_file(a.py)"], finish: { calls: 2, cost: 0.003 } });
   });
 
+  it("keeps the sources a search found, live and after a reload", () => {
+    const sources = [{ chunk_id: "c1", path: "docs/a.md", start_line: 3, end_line: 9, score: 2.5, snippet: "frozen prefix" }];
+    const live = run([
+      { type: "tool_call", id: "t1", name: "search_docs", input: { query: "frozen" }, display: "search_docs(frozen)" },
+      { type: "tool_result", id: "t1", name: "search_docs", text: "1 passage for 'frozen'", is_error: false, outcome: "1 passage", sources },
+    ]);
+    expect(live.items[0]).toMatchObject({ sources, outcome: "1 passage" });
+    const plain = run([call, { type: "tool_result", id: "t1", name: "bash", text: "exit code: 0", is_error: false }]);
+    expect(plain.items[0]).not.toHaveProperty("sources");
+    const reloaded = reduce(initialState, {
+      type: "session_loaded", info,
+      items: [{ kind: "tool", id: "t1", name: "search_docs", input: { query: "frozen" }, result: "1 passage", is_error: false, sources }],
+    });
+    expect(reloaded.items[0]).toMatchObject({ kind: "tool", display: "search_docs(frozen)", sources });
+  });
+
   it("builds the goal card from goal events, and hands its steps to the result", () => {
     let s = run([
       { type: "goal_start", text: "tidy", verify: "true", max_turns: 2 },

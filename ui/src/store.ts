@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Approval, ClientRequest, CostSummary, Info, Mode, ServerEvent, SessionRow, TranscriptItem, Usage } from "./protocol";
+import type { Approval, ClientRequest, CostSummary, Info, Mode, ServerEvent, SessionRow, Source, TranscriptItem, Usage } from "./protocol";
 import type { RoundLine } from "./lib/goal";
 import type { Socket } from "./socket";
 
@@ -45,6 +45,7 @@ export type Item =
       group?: string | null; // calls from one reply that ran at the same time share this
       index?: number | null; // a parallel subagent's number ([1]..[4])
       steps?: string[]; // what a subagent did, step by step
+      sources?: Source[]; // search_docs: the passages it found, best first
       change?: { before: string | null; after: string | null }; // what this call did to its file (the Changes tab shows the whole session)
       finish?: { calls: number; cost: number | null };
     }
@@ -89,6 +90,7 @@ export interface ChatState {
   sidebarOpen: boolean;
   selectedChange: string | null;
   selectedFile: string | null;
+  selectedRange: { start: number; end: number } | null; // lines to show in the file viewer (a search_docs passage)
   showGoal: boolean;
   confirmAllow: boolean;
   wrap: boolean; // wrap long lines in diffs and the file viewer (remembered in this browser)
@@ -128,6 +130,7 @@ export const initialState: ChatState = {
   sidebarOpen: true,
   selectedChange: null,
   selectedFile: null,
+  selectedRange: null,
   showGoal: false,
   confirmAllow: false,
   wrap: true,
@@ -171,6 +174,7 @@ export function fromTranscript(items: TranscriptItem[]): Item[] {
           isError: t.is_error,
           status: "done",
           outcome: t.outcome ?? null,
+          ...(t.sources?.length ? { sources: t.sources } : {}),
         };
     }
   });
@@ -230,7 +234,7 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       // a server that says who decided is exact; an older one leaves us the guess: the next error after a denial is that call
       const exact = ev.approval !== undefined;
       const denied = exact ? (ev.approval && !ev.approval.allowed ? ev.approval.by : null) : ev.is_error ? s.denial : null;
-      const extra = { approval: ev.approval ?? null, outcome: ev.outcome ?? null, mcp: ev.mcp ?? false };
+      const extra = { approval: ev.approval ?? null, outcome: ev.outcome ?? null, mcp: ev.mcp ?? false, ...(ev.sources?.length ? { sources: ev.sources } : {}) };
       return {
         ...s,
         denial: exact || ev.is_error ? null : s.denial,
@@ -344,6 +348,7 @@ export const SLASH_HELP = [
   "/compact [focus] — replace the conversation with a summary",
   "/goal — work unattended until done (opens a form)",
   "/context — show what fills the context window",
+  "/index [--rebuild] — bring the document index (search_docs) up to date",
 ];
 
 interface Actions {
@@ -361,6 +366,7 @@ interface Actions {
   newSession(): void;
   resume(id: string): void;
   compact(focus?: string): void;
+  reindex(rebuild: boolean): void;
   goal(text: string, verify?: string, maxTurns?: number): void;
   patch(partial: Partial<ChatState>): void;
   toggleWrap(): void;
@@ -421,6 +427,8 @@ export const useStore = create<ChatState & Actions>((set, get) => {
             return set({ showGoal: true });
           case "/context":
             return set({ rightTab: "context", rightOpen: true });
+          case "/index":
+            return arg === "" || arg === "--rebuild" ? get().reindex(arg === "--rebuild") : notice("Use /index, or /index --rebuild to build it again from nothing.");
           case "/help":
             return notice(SLASH_HELP.join("\n"));
           default:
@@ -456,6 +464,7 @@ export const useStore = create<ChatState & Actions>((set, get) => {
     newSession: () => void request({ type: "new_session" }),
     resume: (id) => void request({ type: "resume", ref: id }),
     compact: (focus) => void request({ type: "compact", focus }),
+    reindex: (rebuild) => void request({ type: "index", rebuild }),
     goal(text, verify, maxTurns) {
       if (request({ type: "goal", text, verify, max_turns: maxTurns })) {
         set((s) => ({
