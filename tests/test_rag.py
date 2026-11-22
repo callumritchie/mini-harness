@@ -367,15 +367,19 @@ def test_search_docs_reports_sources_to_front_ends_only():
     try:
         session = Session.start("claude-opus-5-5")
         out, err = tools.run("search_docs", {"query": "frozen prefix"}, session)
-        sources = tools.take_sources()
-        assert not err and "notes.md:1-1  (score" in out and "     1\tThe frozen prefix rule." in out
+        sources = tools.take_meta()["sources"]
+        assert not err and "notes.md:1-1  (score 1.00)" in out and "     1\tThe frozen prefix rule." in out and "ranked by keyword match" in out
         assert sources and sources[0]["path"] == "notes.md" and sources[0]["start_line"] == 1
         out2, _ = tools.run("read_file", {"path": "notes.md"}, session)
-        assert tools.take_sources() is None  # another tool leaves nothing behind
+        assert tools.take_meta() is None  # another tool leaves nothing behind
+        out3, _ = tools.run("search_docs", {"query": "frozen prefix", "mode": "meaning"}, session)
+        assert "this was keyword search" in out3 and "/index --embed" in out3  # no model here: it says so
+        tools.take_meta()
         session.add_user("find it")
-        session.log_tool_result({"type": "tool_result", "tool_use_id": "t1", "content": out, "is_error": False}, sources=sources)
+        session.log_tool_result({"type": "tool_result", "tool_use_id": "t1", "content": out, "is_error": False},
+                                meta={"sources": sources, "other": "not kept"})
         events, _ = sessionlog.load(session.log.path)
-        assert sessionlog.tool_sources(events) == {"t1": sources}
+        assert sessionlog.tool_meta(events) == {"t1": {"sources": sources}} and "other" not in events[-1]
         replayed = sessionlog.replay(events)["messages"]
         assert replayed[-1]["content"] == [{"type": "tool_result", "tool_use_id": "t1", "content": out, "is_error": False}]  # no sources for the model
         assert rag.status(root)["files"] == 1 and rag.status(root)["available"] is True

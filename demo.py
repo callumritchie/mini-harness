@@ -17,6 +17,8 @@ Keywords for reviewing every state (used by the screenshot test; they are not in
   cut               a reply that stops at the maximum length
   edit              reads README.md, then edits a line of it (a diff with a removal, additions and context)
   search            search_docs over the demo folder (ranked passages that open in the Files tab)
+  graph             explore_graph on the README's heading (a knowledge-graph card)
+  (/graph build)    the demo model also "reads" passages for the graph: a scripted answer, no cost
   anything else     echoes your message
 """
 import itertools
@@ -50,8 +52,8 @@ def _text(t):
     return NS(type="text", text=t)
 
 
-def _tool(name, **args):
-    return NS(type="tool_use", id=f"toolu_demo{next(_ids)}", name=name, input=args)
+def _tool(tool, **args):
+    return NS(type="tool_use", id=f"toolu_demo{next(_ids)}", name=tool, input=args)
 
 
 def _last_user_text(messages):
@@ -94,6 +96,8 @@ def script(messages):
             return [_text("I wrote `demo.py`. Open the **Changes** tab to see the diff. Say `delete it` to try the approval dialog.")], "end_turn"
         if " passage" in content.split("\n", 1)[0] and "search" in _last_typed(messages).lower():
             return [_text("I found those passages in the index. Open one from the card to see it in the **Files** tab.")], "end_turn"
+        if " link" in content.split("\n", 1)[0] and "graph" in _last_typed(messages).lower():
+            return [_text("That's how the README's heading connects. Each link opens the passage it came from.")], "end_turn"
         if "answered" in content:
             choice = content.split("answered:", 1)[-1].strip()
             return [_text(f"You picked **{choice}**. I'd write hello world in {choice} next (the demo stops here).")], "end_turn"
@@ -113,6 +117,8 @@ def script(messages):
         return [_text("I'll read the README first, then edit it."), _tool("read_file", path="README.md")], "tool_use"
     if "search" in t:
         return [_text("I'll search the project's index."), _tool("search_docs", query="demo folder throwaway")], "tool_use"
+    if "graph" in t:
+        return [_text("I'll look it up in the knowledge graph."), _tool("explore_graph", name="Demo folder")], "tool_use"
     if any(w in t for w in ("delete", "remove", "rm ")):
         return [_text("I'll delete it with a shell command, which needs your approval."), _tool("bash", command="rm demo.py")], "tool_use"
     if any(w in t for w in ("create", "write", "make a file")):
@@ -163,8 +169,15 @@ class DemoClient:
 
     def __init__(self, delay=0.015):
         self.delay = delay
-        self.messages = NS(stream=lambda **kw: _Stream(kw["messages"], self.delay))
+        self.messages = NS(stream=lambda **kw: _Stream(kw["messages"], self.delay), create=self._create)
         self.beta = NS(messages=self.messages)
+
+    @staticmethod
+    def _create(**kw):
+        """A one-shot answer (what /graph build asks for): the same small graph for every passage."""
+        text = ('{"entities": [{"name": "Demo folder", "kind": "concept"}, {"name": "Demo mode", "kind": "component"}], '
+                '"relations": [{"src": "Demo mode", "relation": "works in", "dst": "Demo folder"}]}')
+        return NS(content=[_text(text)], usage=NS(input_tokens=400, output_tokens=60, cache_read_input_tokens=0, cache_creation_input_tokens=0))
 
     def with_options(self, **kw):
         return self

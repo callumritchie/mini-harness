@@ -446,6 +446,14 @@ class Index:
             self.sync(blocking=self.last_sync is None)  # the first search waits for a whole index; later ones never wait for a sync
         prefix = (path_prefix or "").strip("/")
         prefix = "" if prefix == "." else prefix
+        c = self.conn()
+        c.execute("BEGIN")  # one snapshot: the ranked ids and the rows they name must come from the same moment (WAL)
+        try:
+            return self._query(c, query, top_k, prefix, mode, embedder)
+        finally:
+            c.execute("COMMIT")
+
+    def _query(self, c, query, top_k, prefix, mode, embedder):
         pool = top_k * 4
         vectors = embedder is not None and mode != "keyword" and self.embedded(embedder) > 0
         used = mode if vectors else "keyword"
@@ -463,7 +471,7 @@ class Index:
                 hit["found"].append(name)
         best = len(lists) / (RRF_K + 1)
         order = sorted(fused, key=lambda r: (-fused[r]["rrf"], r))
-        rows = {r[0]: r[1:] for r in self.conn().execute(
+        rows = {r[0]: r[1:] for r in c.execute(
             f"SELECT id, chunk_id, path, start_line, end_line, content FROM chunks WHERE id IN ({','.join('?' * len(order))})", order)} if order else {}
         hits, taken = [], {}
         for rowid in order:

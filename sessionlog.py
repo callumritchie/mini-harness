@@ -173,9 +173,17 @@ def replay(events):
     return s
 
 
-def tool_sources(events):
-    """The structured sources saved with tool results (search_docs), by tool call id, for redrawing a conversation."""
-    return {e["tool_use_id"]: e["sources"] for e in events if e.get("type") == "tool_result" and e.get("sources")}
+META_KEYS = ("sources", "graph")  # = tools.META_KEYS (this module stays free of the tools)
+
+
+def tool_meta(events):
+    """What tool results saved for front ends (search_docs' sources, explore_graph's graph), by tool call id, for redrawing a
+    conversation: {id: {"sources": [...]}}."""
+    out = {}
+    for e in events:
+        if e.get("type") == "tool_result" and any(e.get(k) for k in META_KEYS):
+            out[e["tool_use_id"]] = {k: e[k] for k in META_KEYS if e.get(k)}
+    return out
 
 
 def _add_cost(totals, event):

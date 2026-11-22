@@ -16,6 +16,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+import graph
+import rag
 import safety
 import sessionlog
 import tools
@@ -110,7 +112,7 @@ class WebUI(UI):
             group = self.groups.get(call_id)
         self.emit("tool_call", id=call_id, name=name, input=clean(args), display=safety.visible(display, limit=300), parallel_group=group)
 
-    def tool_result(self, call_id, name, text, is_error, sources=None):
+    def tool_result(self, call_id, name, text, is_error, meta=None):
         with self.lock:
             _, args = self.calls.pop(call_id, (name, {}))
             self.groups.pop(call_id, None)
@@ -119,7 +121,7 @@ class WebUI(UI):
         mcp = bool(ctl is not None and ctl.mcp is not None and ctl.mcp.owns(name))
         self.emit("tool_result", id=call_id, name=name, text=clean(text, tools.MAX_TOOL_OUTPUT), is_error=bool(is_error),
                   outcome=tools.outcome(name, args, text, is_error), approval=approval, mcp=mcp,
-                  **({"sources": clean(sources, MAX_STRING)} if sources else {}))
+                  **{k: clean(v, MAX_STRING) for k, v in (meta or {}).items() if k in tools.META_KEYS})
 
     def event(self, kind, data, text):
         """Goal and subagent progress as structured events (the browser builds its cards from them); the text is not sent."""
@@ -265,13 +267,13 @@ def create_app(controller, webui, token, port, dev_origins=()):
             raise HTTPException(404, "no such session")
         events, _ = sessionlog.load(path)  # also for the current session: the sources a search found are only in the log
         messages = controller.session.messages if session_id == controller.session.id else sessionlog.replay(events)["messages"]
-        sources = sessionlog.tool_sources(events)
+        meta = sessionlog.tool_meta(events)
         items = sessionlog.render_messages(messages)
-        for item in items:  # the same short outcome and sources a live tool row gets, so a reloaded page reads the same
+        for item in items:  # the same short outcome and sources/graph a live tool row gets, so a reloaded page reads the same
             if item.get("kind") == "tool" and item.get("result") is not None:
                 item["outcome"] = tools.outcome(item.get("name"), item.get("input") or {}, item["result"], item.get("is_error"))
-            if item.get("kind") == "tool" and item.get("id") in sources:
-                item["sources"] = sources[item["id"]]
+            if item.get("kind") == "tool" and item.get("id") in meta:
+                item.update(meta[item["id"]])
         return clean(items, 20000)
 
     @app.get("/api/session/{session_id}")
@@ -307,6 +309,20 @@ def create_app(controller, webui, token, port, dev_origins=()):
     def context_data():
         return controller.context_data()
 
+    @app.get("/api/index")
+    def index_status():
+        return controller.index_status()
+
+    @app.get("/api/graph")
+    def graph_view(name: str = Query(..., min_length=1, max_length=200), depth: int = Query(1, ge=1, le=graph.MAX_DEPTH),
+                   relation: str = Query(None, max_length=40)):
+        """The same lookup as the explore_graph tool, for the Knowledge tab. Read-only; the graph only ever covers the project."""
+        if not rag.available():
+            raise HTTPException(503, "the index needs SQLite with FTS5")
+        index = rag.get(Path.cwd())
+        graph.ensure(index)
+        return {"graph": clean(graph.explore(index, name, depth, relation or None), MAX_STRING)}
+
     # ---------- WebSocket ----------
 
     def run_in_thread(fn, *args):
@@ -334,12 +350,21 @@ def create_app(controller, webui, token, port, dev_origins=()):
             webui.emit("error", message=str(e))
         webui.emit("info", info=controller.info())
 
-    def do_index(rebuild):
+    def do_index(rebuild, embed_now):
         try:
-            webui.emit("notice", text=controller.reindex(rebuild))
+            webui.emit("notice", text=controller.reindex(rebuild, embed_now))
         except Exception as e:  # noqa: BLE001
             webui.emit("error", message=str(e))
         webui.emit("info", info=controller.info())
+
+    def do_graph_estimate(prose_only, model):
+        try:
+            webui.emit("graph_estimate", **controller.graph_estimate(prose_only, model), prose_only=prose_only)
+        except Exception as e:  # noqa: BLE001
+            webui.emit("error", message=str(e))
+
+    def do_graph_build(prose_only, model):
+        finish(controller.graph_build(prose_only, model))
 
     def load_session():
         webui.changes.clear()
@@ -394,7 +419,12 @@ def create_app(controller, webui, token, port, dev_origins=()):
                 return webui.emit("error", message="A task is running. Stop it first.")
             run_in_thread(do_compact, msg.get("focus") if isinstance(msg.get("focus"), str) else None)
         elif kind == "index":  # allowed while a task runs: the index has its own lock, and searches never wait for a sync
-            run_in_thread(do_index, msg.get("rebuild") is True)
+            run_in_thread(do_index, msg.get("rebuild") is True, msg.get("embed") is True)
+        elif kind in ("graph_estimate", "graph_build"):
+            model = msg.get("model") if isinstance(msg.get("model"), str) and msg.get("model") else None
+            if kind == "graph_build" and busy:
+                return webui.emit("error", message="A task is already running. Stop it first.")
+            run_in_thread(do_graph_estimate if kind == "graph_estimate" else do_graph_build, msg.get("prose_only") is not False, model)
         else:
             webui.emit("error", message=f"Unknown request '{kind}'.")
 

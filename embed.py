@@ -91,6 +91,11 @@ class HashEmbedder:
 _local = None
 
 
+def loaded():
+    """The embedder if one is already in memory (searches never load the model themselves: the background job does)."""
+    return _local
+
+
 def get(allow_download=False):
     """The embedder to use, or None: the local model if its library is installed and the model is downloaded (or a download is
     allowed now). Built once per process; loading it takes a second or two."""

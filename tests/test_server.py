@@ -17,6 +17,7 @@ from starlette.websockets import WebSocketDisconnect
 
 import agent
 import demo
+import rag
 import webserver
 from controller import Controller
 
@@ -110,7 +111,37 @@ with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
     assert all("sources" not in b for m in ctl.session.messages if isinstance(m["content"], list) for b in m["content"] if isinstance(b, dict))
     ws.send_json({"type": "index", "rebuild": True})
     ev = collect(ws, "info")
-    assert any(e["type"] == "notice" and e["text"].startswith("Index updated:") for e in ev) and ev[-1]["info"]["index"]["files"] >= 2
+    notice = next(e for e in ev if e["type"] == "notice")
+    assert notice["text"].startswith("Index updated:") and "Graph:" in notice["text"] and ev[-1]["info"]["index"]["files"] >= 2
+
+    # the graph: a demo lookup gives the browser the neighbourhood, the REST lookup is the same, and a reload keeps it
+    (project / "notes.md").write_text("# Demo folder\n\nThe `greet` function says hello.\n")  # the demo looks up this heading
+    rag.get(project).sync()  # written by the test itself, inside the index's 2-second re-check window
+    ws.send_json({"type": "send", "text": "graph"})
+    ev = collect(ws, "done")
+    res = next(e for e in ev if e["type"] == "tool_result")
+    assert res["name"] == "explore_graph" and not res["is_error"] and res["outcome"] == "2 links", res
+    assert res["graph"]["center"]["name"] == "Demo folder" and {e["relation"] for e in res["graph"]["edges"]} == {"contains", "mentions"}
+    g = client.get("/api/graph", params={"name": "greet"}, headers=H).json()["graph"]
+    assert g["center"]["name"] == "demo.greet" and any(e["relation"] == "mentions" and e["path"] == "notes.md" for e in g["edges"])
+    assert client.get("/api/graph", params={"name": "zebra"}, headers=H).json()["graph"] is None
+    assert client.get("/api/graph", params={"name": "x", "depth": 9}, headers=H).status_code == 422
+    assert client.get("/api/graph", params={"name": "greet"}).status_code == 401
+    st = client.get("/api/index", headers=H).json(); assert st["available"] and st["entities"] > 0 and "embed_installed" in st
+    items = client.get(f"/api/session/{ctl.session.id}", headers=H).json()["items"]
+    assert next(i for i in items if i["kind"] == "tool" and i["id"] == res["id"])["graph"] == res["graph"]
+
+    # a model-read graph: first the estimate (nothing sent), then the build, whose cost lands in the session
+    ws.send_json({"type": "graph_estimate"})
+    est = collect(ws, "graph_estimate")[-1]
+    assert est["passages"] >= 1 and est["model"] == "claude-haiku-5-5" and est["cost"] > 0 and est["prose_only"] is True
+    cost0 = ctl.session.totals["cost_usd"]
+    ws.send_json({"type": "graph_build"})
+    ev = collect(ws, "done")
+    assert any(e["type"] == "notice" and e["text"].startswith("Graph built:") for e in ev) and not ev[-1]["error"], ev[-1]
+    assert ctl.session.totals["cost_usd"] > cost0
+    g = client.get("/api/graph", params={"name": "Demo mode"}, headers=H).json()["graph"]
+    assert g["center"]["kind"] == "component" and g["edges"][0]["relation"] == "works_in"
 
     # a delete asks, with the exact command; deny keeps the file, allow removes it
     ws.send_json({"type": "send", "text": "delete it"})
