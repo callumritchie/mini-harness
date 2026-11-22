@@ -13,11 +13,12 @@ dependencies = ["anthropic>=0.79"]
 
 [project.optional-dependencies]
 ui = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
-dev = ["httpx>=0.27", "fastapi>=0.110", "uvicorn[standard]>=0.29"]
+dev = ["httpx>=0.27", "fastapi>=0.110", "uvicorn[standard]>=0.29", "numpy>=1.24"]
+rag = ["fastembed>=0.5", "numpy>=1.24"]  # the local embedding model for search by meaning (downloaded only on /index --embed)
 
 [project.scripts]
 mini-harness = "agent:main"
 
 [tool.setuptools]
-py-modules = ["agent", "compaction", "context", "controller", "demo", "goal", "judge", "mcp", "permissions", "pricing",
-              "safety", "session", "sessionlog", "skills", "terminal", "tools", "webserver"]
+py-modules = ["agent", "compaction", "context", "controller", "demo", "embed", "goal", "graph", "judge", "mcp", "permissions", "pricing",
+              "rag", "safety", "session", "sessionlog", "skills", "terminal", "tools", "webserver"]

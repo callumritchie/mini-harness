@@ -13,7 +13,10 @@ import anthropic
 import agent
 import compaction
 import context
+import embed
+import graph
 import pricing
+import rag
 import sessionlog
 import skills
 import tools
@@ -26,7 +29,7 @@ class UI:
 
     def text(self, delta): pass  # a piece of the model's reply, as it streams
     def tool_call(self, call_id, name, args, display): pass  # a tool is about to run
-    def tool_result(self, call_id, name, text, is_error): pass
+    def tool_result(self, call_id, name, text, is_error, meta=None): pass  # meta: {"sources": [...]} or {"graph": {...}}, structured
     def usage(self, usage, cost, summary): pass  # tokens and cost of one call; summary = (total usd, complete, note)
     def notice(self, text): pass  # compaction, the judge, subagent activity, goal progress...
     def change(self, path, before, after): pass  # a file was written or edited (before is None for a new file)
@@ -60,6 +63,7 @@ class Controller:
         self.lock = threading.Lock()  # one task at a time
         self.listing = []
         self.client = self.client_error = self.mcp = None
+        self.index_job = threading.Lock()  # one background index job at a time
 
     # ---------- start ----------
 
@@ -76,7 +80,29 @@ class Controller:
         self.permissions.say = self.ui.notice
         self.mcp = agent.start_mcp_and_skills(self.args)
         self.session.ask_human = self.ui.ask_user
+        self._index_in_background()
         return self.info()
+
+    def _index_in_background(self):
+        """Bring the document index, its structure graph and (if the model is already downloaded) its vectors up to date without
+        holding anything up. Runs at start and after every task; a job already running is not started twice. --no-index skips it
+        (the tools still update the index themselves when they are used)."""
+        if not rag.available() or getattr(self.args, "no_index", False) or not self.index_job.acquire(blocking=False):
+            return
+
+        def go():
+            try:
+                index = rag.get(Path.cwd())
+                index.sync()
+                graph.build_structure(index)
+                embedder = embed.get()  # never downloads: that waits for /index --embed
+                if embedder is not None:
+                    index.embed_pending(embedder)
+            except Exception as e:  # noqa: BLE001 - search_docs tries again on its own; the person should still know
+                self.ui.notice(f"The document index could not be updated: {e}")
+            finally:
+                self.index_job.release()
+        threading.Thread(target=go, daemon=True).start()
 
     @property
     def limit(self):
@@ -92,7 +118,11 @@ class Controller:
             "agents_md": context.AGENTS_FILE in s.system_parts, "skills": [x["name"] for x in skills.discover(Path.cwd())[0]],
             "mcp_tools": sorted(self.mcp.tools) if self.mcp else [], "price_known": pricing.prices(self.model) is not None,
             "cost": {"usd": usd, "complete": complete, "note": note}, "turns": s.totals["calls"], "compactions": s.compactions,
+            "index": self.index_status(),
         }
+
+    def index_status(self):
+        return rag.status(Path.cwd(), embed.loaded())
 
     def _bind(self, session):
         self.session = session
@@ -105,12 +135,21 @@ class Controller:
         settings = dict(
             on_text=self.ui.text, on_tool=lambda name, args: None,
             on_call=lambda cid, name, args: self.ui.tool_call(cid, name, args, tools.describe_call(name, args)),
-            on_result=self.ui.tool_result, on_change=self.ui.change, cancel=self.cancel, say=self.ui.notice,
+            on_result=self.ui.tool_result, on_change=self._changed, cancel=self.cancel, say=self.ui.notice,
             on_usage=lambda u, usd: self.ui.usage(u, usd, s.cost_summary()), event=self.ui.event, on_parallel=self.ui.parallel,
             limits=Limits(s, max_turns=self.args.max_turns or agent.MAX_STEPS, max_cost=self.args.max_cost),
         )
         settings.update(overrides)
         return agent.make_run(self.client, self.provider, self.model, self.args, self.permissions, self.mcp, s, **settings)
+
+    def _changed(self, path, before, after):
+        """The agent wrote a file: show it, and re-index it now (if a sync is running, that sync or the next search sees it)."""
+        self.ui.change(path, before, after)
+        if rag.available():
+            try:
+                rag.get(Path.cwd()).update_paths([path])
+            except Exception:  # noqa: BLE001 - the index is a convenience; it must never break a write
+                pass
 
     def _guard(self, fn):
         """Run `fn` (which returns a TaskResult) and turn every way it can end into a TaskResult. Only one at a time."""
@@ -133,6 +172,7 @@ class Controller:
         finally:
             self.ui.status(False)
             self.lock.release()
+            self._index_in_background()  # the task may have changed files: catch the graph and vectors up
 
     def send(self, text):
         def go():
@@ -218,6 +258,71 @@ class Controller:
         self._bind(session)
         self.model, self.provider, self.client, self.client_error = model, agent.provider_for(model), client, None
         return session.resume_report
+
+    # ---------- the document index ----------
+
+    def _index(self):
+        if not rag.available():
+            raise UserError("The document index needs SQLite with full-text search (FTS5), and this Python's SQLite does not have it.")
+        return rag.get(Path.cwd())
+
+    def reindex(self, rebuild=False, embed_now=False):
+        """/index: bring the document index and its structure graph up to date now (rebuild: from nothing). With embed_now, also
+        embed every passage for search by meaning, downloading the local model first if it is not here yet. Returns text."""
+        index = self._index()
+        lines = [rag.describe(index.sync(rebuild=rebuild))]
+        g = graph.build_structure(index)
+        counts = index.counts()
+        lines.append(f"Graph: {counts['entities']:,} things and {counts['edges']:,} links ({g['parsed']} file(s) read, {g['cached']} from cache).")
+        if embed_now and not embed.available():
+            raise UserError("\n".join(lines + ["Search by meaning needs the local embedding model: pip install -e \".[rag]\" (it brings "
+                                               f"fastembed and numpy), then /index --embed again. The model ({embed.MODEL_SIZE_NOTE}) is "
+                                               "downloaded once and runs on this computer; nothing is sent anywhere."]))
+        embedder = embed.get(allow_download=embed_now)
+        if embedder is not None:
+            s = index.embed_pending(embedder, cancel=self.cancel)
+            if s is None:
+                lines.append("Embedding is already running in the background.")
+            else:
+                lines.append(f"Meaning: {index.embedded(embedder):,} of {counts['chunks']:,} passages embedded with {embedder.model_id}"
+                             f" ({s['embedded']} new{', stopped' if s['stopped'] else ''}).")
+        elif embed.available():
+            lines.append(f"Search by meaning is off: /index --embed downloads the local model ({embed.MODEL_SIZE_NOTE}) and turns it on.")
+        return "\n".join(lines)
+
+    def graph_estimate(self, prose_only=True, model=None):
+        """What /graph build would read and roughly cost (nothing is sent)."""
+        index = self._index()
+        graph.ensure(index)
+        return graph.estimate(index, model or graph.LLM_MODEL, prose_only)
+
+    def graph_build(self, prose_only=True, model=None):
+        """/graph build: a model reads each new prose passage once and adds the concepts and relations it finds. Costs money:
+        every call is counted in the session's cost and stops at --max-cost; Stop ends it. Returns a TaskResult."""
+        model = model or graph.LLM_MODEL
+
+        def go():
+            index = self._index()
+            graph.ensure(index)
+            provider = agent.provider_for(model)
+            client = self.client if provider == self.provider else self.client_factory(provider)
+            limits = Limits(self.session, max_cost=self.args.max_cost)
+            before = self.session.totals["cost_usd"]
+
+            def on_cost(usage, usd):
+                self.session.add_aux("graph", model, usage, usd)
+                limits.after_call(self.session)
+            s = graph.build_llm(index, client, model, prose_only, on_cost=on_cost, cancel=self.cancel, say=self.ui.notice)
+            if s["stopped"]:
+                raise KeyboardInterrupt
+            counts = index.counts()
+            spent = self.session.totals["cost_usd"] - before
+            text = (f"Graph built: {s['read']} passage(s) read by {model} ({pricing.money(spent)}), {s['cached']} from earlier reads"
+                    + (f", {s['invalid']} unusable answer(s) skipped" if s["invalid"] else "")
+                    + f". The graph has {counts['entities']:,} things and {counts['edges']:,} links.")
+            self.ui.notice(text)
+            return TaskResult(text=text)
+        return self._guard(go)
 
     # ---------- context and compaction ----------
 

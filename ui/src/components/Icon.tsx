@@ -43,6 +43,8 @@ const PATHS: Record<string, ReactNode> = {
   cut: <path d="M3 8h7M8 5l3 3-3 3M13 4v8" />,
   copy: <><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" /></>,
   user: <><circle cx="8" cy="5.5" r="2.5" /><path d="M3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4" /></>,
+  docs: <><path d="M3 2.5h6.5l3.5 3.5v7.5H3z" /><circle cx="7.5" cy="9" r="2" /><path d="M9 10.5l2 2" /></>,
+  graph: <><circle cx="8" cy="8" r="1.75" /><circle cx="3" cy="3.5" r="1.5" /><circle cx="13" cy="4" r="1.5" /><circle cx="4" cy="13" r="1.5" /><path d="M6.6 7L4.1 4.6M9.5 7.2l2.3-2.2M6.8 9.3L5 11.8" /></>,
 };
 
 export type IconName = keyof typeof PATHS;
@@ -60,7 +62,7 @@ export function Icon({ name, size = 14, className, strokeWidth }: { name: IconNa
 
 const TOOL_ICON: Record<string, IconName> = {
   bash: "terminal", read_file: "file", write_file: "file-plus", edit_file: "edit", glob: "folder", grep: "grep", web_search: "globe",
-  ask_user: "bubble", subagent: "subagent", code_execution: "play",
+  ask_user: "bubble", subagent: "subagent", code_execution: "play", search_docs: "docs", explore_graph: "graph",
 };
 
 /** The icon for a tool call; every MCP tool (and anything unknown) gets the plug. */

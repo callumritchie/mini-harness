@@ -173,6 +173,19 @@ def replay(events):
     return s
 
 
+META_KEYS = ("sources", "graph")  # = tools.META_KEYS (this module stays free of the tools)
+
+
+def tool_meta(events):
+    """What tool results saved for front ends (search_docs' sources, explore_graph's graph), by tool call id, for redrawing a
+    conversation: {id: {"sources": [...]}}."""
+    out = {}
+    for e in events:
+        if e.get("type") == "tool_result" and any(e.get(k) for k in META_KEYS):
+            out[e["tool_use_id"]] = {k: e[k] for k in META_KEYS if e.get(k)}
+    return out
+
+
 def _add_cost(totals, event):
     """Add one event's saved cost to the totals. A call with no price counts as unpriced, never as $0."""
     c = event.get("cost")

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Approval, ClientRequest, CostSummary, Info, Mode, ServerEvent, SessionRow, TranscriptItem, Usage } from "./protocol";
+import type { Approval, ClientRequest, CostSummary, GraphEstimate, GraphResult, Info, Mode, ServerEvent, SessionRow, Source, TranscriptItem, Usage } from "./protocol";
 import type { RoundLine } from "./lib/goal";
 import type { Socket } from "./socket";
 
@@ -45,6 +45,8 @@ export type Item =
       group?: string | null; // calls from one reply that ran at the same time share this
       index?: number | null; // a parallel subagent's number ([1]..[4])
       steps?: string[]; // what a subagent did, step by step
+      sources?: Source[]; // search_docs: the passages it found, best first
+      graph?: GraphResult; // explore_graph: the neighbourhood it found
       change?: { before: string | null; after: string | null }; // what this call did to its file (the Changes tab shows the whole session)
       finish?: { calls: number; cost: number | null };
     }
@@ -70,7 +72,7 @@ export interface AskRequest {
   choices: string[];
 }
 
-export type RightTab = "files" | "changes" | "context";
+export type RightTab = "files" | "changes" | "knowledge" | "context";
 
 export interface ChatState {
   connected: boolean;
@@ -89,6 +91,7 @@ export interface ChatState {
   sidebarOpen: boolean;
   selectedChange: string | null;
   selectedFile: string | null;
+  selectedRange: { start: number; end: number } | null; // lines to show in the file viewer (a search_docs passage)
   showGoal: boolean;
   confirmAllow: boolean;
   wrap: boolean; // wrap long lines in diffs and the file viewer (remembered in this browser)
@@ -97,6 +100,8 @@ export interface ChatState {
   draft: string | null; // text a starter button wants put in the message box
   goalRun: GoalRun | null; // the goal started from this page, until its result arrives
   goalLive: GoalLive | null; // the running goal's steps, from the server's goal events
+  graphEstimate: GraphEstimate | null; // what a model-read graph build would cost, waiting for the person's yes
+  knowledgeQuery: string | null; // a thing to look up in the Knowledge tab (a node clicked in a graph card)
 }
 
 const WRAP_KEY = "mini-harness-wrap";
@@ -128,6 +133,7 @@ export const initialState: ChatState = {
   sidebarOpen: true,
   selectedChange: null,
   selectedFile: null,
+  selectedRange: null,
   showGoal: false,
   confirmAllow: false,
   wrap: true,
@@ -135,11 +141,13 @@ export const initialState: ChatState = {
   draft: null,
   goalRun: null,
   goalLive: null,
+  graphEstimate: null,
+  knowledgeQuery: null,
 };
 
 /** One line describing a tool call, like the terminal's activity line. */
 export function describeCall(name: string, input: Record<string, unknown>): string {
-  const pick = ["command", "path", "pattern", "query", "question", "task"].map((k) => input[k]).find((v) => typeof v === "string") as
+  const pick = ["command", "path", "pattern", "query", "name", "question", "task"].map((k) => input[k]).find((v) => typeof v === "string") as
     | string
     | undefined;
   const detail = pick ?? (Object.keys(input).length ? JSON.stringify(input) : "");
@@ -171,6 +179,8 @@ export function fromTranscript(items: TranscriptItem[]): Item[] {
           isError: t.is_error,
           status: "done",
           outcome: t.outcome ?? null,
+          ...(t.sources?.length ? { sources: t.sources } : {}),
+          ...(t.graph ? { graph: t.graph } : {}),
         };
     }
   });
@@ -230,7 +240,8 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       // a server that says who decided is exact; an older one leaves us the guess: the next error after a denial is that call
       const exact = ev.approval !== undefined;
       const denied = exact ? (ev.approval && !ev.approval.allowed ? ev.approval.by : null) : ev.is_error ? s.denial : null;
-      const extra = { approval: ev.approval ?? null, outcome: ev.outcome ?? null, mcp: ev.mcp ?? false };
+      const extra = { approval: ev.approval ?? null, outcome: ev.outcome ?? null, mcp: ev.mcp ?? false, ...(ev.sources?.length ? { sources: ev.sources } : {}),
+        ...(ev.graph ? { graph: ev.graph } : {}) };
       return {
         ...s,
         denial: exact || ev.is_error ? null : s.denial,
@@ -329,6 +340,10 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       };
     case "error":
       return { ...s, items: [...s.items, { kind: "error", id: nextId("e"), text: ev.message }] };
+    case "graph_estimate": {
+      const { type: _type, ...estimate } = ev;
+      return { ...s, graphEstimate: estimate, rightTab: "knowledge", rightOpen: true };
+    }
   }
 }
 
@@ -344,6 +359,8 @@ export const SLASH_HELP = [
   "/compact [focus] — replace the conversation with a summary",
   "/goal — work unattended until done (opens a form)",
   "/context — show what fills the context window",
+  "/index [--rebuild] [--embed] — update the document index and graph (--embed: search by meaning)",
+  "/graph [build] — open the Knowledge tab; build has a model read the prose (shows the cost first)",
 ];
 
 interface Actions {
@@ -361,6 +378,9 @@ interface Actions {
   newSession(): void;
   resume(id: string): void;
   compact(focus?: string): void;
+  reindex(rebuild: boolean, embed?: boolean): void;
+  estimateGraph(proseOnly?: boolean): void;
+  buildGraph(): void;
   goal(text: string, verify?: string, maxTurns?: number): void;
   patch(partial: Partial<ChatState>): void;
   toggleWrap(): void;
@@ -421,6 +441,15 @@ export const useStore = create<ChatState & Actions>((set, get) => {
             return set({ showGoal: true });
           case "/context":
             return set({ rightTab: "context", rightOpen: true });
+          case "/index": {
+            const words = arg.split(/\s+/).filter(Boolean);
+            return words.every((w) => w === "--rebuild" || w === "--embed")
+              ? get().reindex(words.includes("--rebuild"), words.includes("--embed"))
+              : notice("Use /index [--rebuild] [--embed]: --rebuild starts over, --embed turns on search by meaning.");
+          }
+          case "/graph":
+            if (arg === "build" || arg === "build --all") return get().estimateGraph(arg !== "build --all");
+            return set({ rightTab: "knowledge", rightOpen: true });
           case "/help":
             return notice(SLASH_HELP.join("\n"));
           default:
@@ -456,6 +485,12 @@ export const useStore = create<ChatState & Actions>((set, get) => {
     newSession: () => void request({ type: "new_session" }),
     resume: (id) => void request({ type: "resume", ref: id }),
     compact: (focus) => void request({ type: "compact", focus }),
+    reindex: (rebuild, embed) => void request({ type: "index", rebuild, embed: embed ?? false }),
+    estimateGraph: (proseOnly = true) => void request({ type: "graph_estimate", prose_only: proseOnly }),
+    buildGraph() {
+      const e = get().graphEstimate;
+      if (e && request({ type: "graph_build", prose_only: e.prose_only, model: e.model })) set({ graphEstimate: null });
+    },
     goal(text, verify, maxTurns) {
       if (request({ type: "goal", text, verify, max_turns: maxTurns })) {
         set((s) => ({

@@ -390,6 +390,80 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
 .tool-diff .diff-body { padding: 4px 0; }
 .tool-foot { position: sticky; bottom: 0; display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--footer); border-top: 1px solid var(--hover); }
 
+/* search_docs: ranked passages */
+.sources { list-style: none; margin: 0; padding: 4px 0; }
+.source + .source { border-top: 1px solid var(--line-mid); }
+.source-head { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 6px; min-width: 0; }
+.source-rank { width: 16px; text-align: right; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.source-where { flex: 1 1 auto; min-width: 0; text-align: left; background: none; border: 0; padding: 2px 0; font: inherit; font-family: var(--font-mono);
+  font-size: var(--fs-sm); color: var(--accent-ink); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-where:hover { text-decoration: underline; }
+.source-where:focus-visible { outline: none; box-shadow: var(--focus); border-radius: 3px; }
+.source-score { display: flex; align-items: center; gap: 6px; flex: none; }
+.source-bar { width: 56px; height: 4px; border-radius: 2px; background: var(--control); overflow: hidden; }
+.source-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+.source-num { font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
+.source-snippet { margin: 0 12px 8px 46px; padding: 8px 10px; background: var(--sunken); border: 1px solid var(--line-mid); border-radius: var(--radius-sm);
+  color: var(--text-2); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+@media (max-width: 480px) { .source-bar { display: none; } .source-snippet { margin-left: 12px; } }
+.source-match.meaning, .source-match.both { background: var(--accent-surface); color: var(--accent-ink); }
+
+/* explore_graph: one thing's neighbourhood. Kinds take the syntax colours, so they hold in light and dark. */
+.k-module { --k: var(--hl-title); } .k-class { --k: var(--hl-keyword); } .k-function { --k: var(--hl-string); }
+.k-section { --k: var(--hl-number); } .k-document { --k: var(--muted); } .k-concept { --k: var(--accent); }
+.k-component { --k: var(--hl-built); } .k-symbol, .k-other { --k: var(--text-3); }
+.graph-card { padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.graph-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.graph-name { font-family: var(--font-mono); font-size: var(--fs-md); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.graph-head .tool-meta { margin-left: auto; }
+.kind-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--k); flex: none; }
+.graph-svg { width: 100%; max-height: 220px; background: var(--sunken); border: 1px solid var(--line-mid); border-radius: var(--radius-sm); }
+.g-edge { stroke: var(--line-strong); stroke-width: 1; } .g-edge.llm { stroke-dasharray: 3 3; }
+.g-node circle { fill: var(--k); stroke: var(--panel); stroke-width: 1.5; }
+.g-node.center circle { stroke: var(--text); stroke-width: 1.5; }
+.g-node text { font-family: var(--font-ui); font-size: 9px; fill: var(--text-2); paint-order: stroke; stroke: var(--sunken); stroke-width: 3px; }
+.g-node.center text { font-weight: 600; fill: var(--text); }
+.g-node.pickable { cursor: pointer; } .g-node.pickable:hover circle { stroke: var(--accent); }
+.graph-groups { display: flex; flex-direction: column; gap: 6px; }
+.graph-group h4 { margin: 0 0 2px; font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); text-transform: none; }
+.graph-group ul { list-style: none; margin: 0; padding: 0; }
+.graph-link { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 2px 0; font-size: var(--fs-sm); }
+.g-arrow { width: 12px; color: var(--muted); flex: none; text-align: center; }
+.g-from { font-family: var(--font-mono); color: var(--text-2); max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }
+.g-target { font-family: var(--font-mono); color: var(--text); background: none; border: 0; padding: 0; font-size: var(--fs-sm); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+button.g-target { cursor: pointer; } button.g-target:hover { color: var(--accent-ink); text-decoration: underline; }
+.g-kind { font-size: var(--fs-xs); color: var(--muted); flex: none; }
+.g-cite { margin-left: auto; flex: none; background: none; border: 0; padding: 0; font-family: var(--font-mono); font-size: var(--fs-xs);
+  color: var(--accent-ink); cursor: pointer; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g-cite:hover { text-decoration: underline; }
+.g-target:focus-visible, .g-cite:focus-visible { outline: none; box-shadow: var(--focus); border-radius: 3px; }
+.graph-found { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: var(--fs-xs); }
+.graph-found .g-cite { margin-left: 0; max-width: none; }
+.g-alt { font-family: var(--font-mono); color: var(--text-2); }
+.graph-note, .graph-empty { margin: 0; font-size: var(--fs-xs); }
+@media (max-width: 480px) { .g-kind { display: none; } }
+
+/* the Knowledge tab */
+.knowledge { padding: 12px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+.k-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.k-stats > div { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-card); padding: 8px; display: flex; flex-direction: column; min-width: 0; }
+.k-num { font-size: var(--fs-lg); font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.k-label { font-size: var(--fs-xs); color: var(--muted); }
+.k-line { margin: -4px 0 0; font-size: var(--fs-xs); }
+.k-section { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.k-section h3 { margin: 0; font-size: var(--fs-title); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.k-help { margin: 0; font-size: var(--fs-sm); color: var(--text-2); line-height: 1.5; }
+.k-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.k-progress { height: 4px; border-radius: 2px; background: var(--control); overflow: hidden; }
+.k-progress > span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.k-estimate { background: var(--note-bg); border: 1px solid var(--note-line); color: var(--note-ink); border-radius: var(--radius-card); padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-sm); line-height: 1.5; }
+.k-estimate p { margin: 0; }
+.k-search { display: flex; gap: 6px; } .k-search input { flex: 1 1 auto; min-width: 0; } .k-search select { width: auto; flex: none; }
+.knowledge .graph-card { padding: 0; }
+@media (max-width: 480px) { .k-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 .ask { display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--accent-surface-line); border-radius: var(--radius); padding: 16px; background: var(--accent-surface); }
 .ask-eyebrow { display: flex; align-items: center; gap: 8px; color: var(--accent-ink); font-size: var(--fs-sm); }
 .ask-q { font-size: var(--fs-title); font-weight: 500; color: var(--text); line-height: 1.45; }
@@ -484,6 +558,7 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
 .code { padding: 10px 0; line-height: 1.65; color: var(--text-2); }
 .code.nowrap { overflow-x: auto; width: max-content; min-width: 100%; }
 .code .row { display: grid; grid-template-columns: 44px minmax(0, 1fr); } .code code { padding-right: 14px; }
+.code .row.marked { background: var(--accent-surface); box-shadow: inset 2px 0 0 var(--accent); } /* a search_docs passage */
 .code.nowrap code { white-space: pre; } .code.wrap code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .no { color: var(--muted); font-family: var(--font-mono); font-size: var(--fs-sm); width: 44px; padding-right: 14px; text-align: right; user-select: none; flex: none; }
 .cant-wrap { padding: 12px; }
