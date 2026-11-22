@@ -49,6 +49,7 @@ export interface IndexStatus {
   embed_downloaded?: boolean; // its model is on this computer
   embed_model?: string;
   embed_size?: string;
+  embed_install?: string; // the pip command for the Python running the server
   error?: string;
 }
 

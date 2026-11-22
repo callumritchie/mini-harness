@@ -12,6 +12,7 @@ import hashlib
 import math
 import os
 import re
+import sys
 
 import sessionlog
 
@@ -28,6 +29,11 @@ def model_id():
 
 def cache_dir():
     return sessionlog.home() / "models"
+
+
+def install_command():
+    """The command that installs the [rag] extra into the Python running this, not whichever `pip` is first on the PATH."""
+    return f'"{sys.executable}" -m pip install -e ".[rag]"'
 
 
 def available():

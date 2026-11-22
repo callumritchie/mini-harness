@@ -670,5 +670,5 @@ def status(root=None, embedder=None):
     except (sqlite3.Error, OSError) as e:
         return {"available": True, "error": str(e)}
     out.update(embed_installed=embed.available(), embed_downloaded=embed.available() and embed.downloaded(),
-               embed_model=embed.model_id(), embed_size=embed.MODEL_SIZE_NOTE)
+               embed_model=embed.model_id(), embed_size=embed.MODEL_SIZE_NOTE, embed_install=embed.install_command())
     return out

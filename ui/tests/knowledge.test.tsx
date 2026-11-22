@@ -133,6 +133,10 @@ describe("KnowledgePanel", () => {
     expect(screen.getByText("not installed")).toBeTruthy();
     expect(screen.getByText(/pip install -e/)).toBeTruthy();
     cleanup();
+    status = { ...base, embed_install: '"/opt/py/bin/python3" -m pip install -e ".[rag]"' };
+    render(<KnowledgePanel />);
+    await waitFor(() => expect(screen.getByText(/\/opt\/py\/bin\/python3/)).toBeTruthy());
+    cleanup();
     status = { ...base, embed_installed: true };
     render(<KnowledgePanel />);
     await waitFor(() => expect(screen.getByText("Download model & embed")).toBeTruthy());
