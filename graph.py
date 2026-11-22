@@ -484,10 +484,12 @@ def find(index, name, limit=5):
     """Entities that best match a name: exact (any case), then a qualified name ending in it, then by words. Best first."""
     c = index.conn()
     q = " ".join(name.split())
-    rows = c.execute("SELECT id, name, kind FROM entities WHERE lower(name) = lower(?) ORDER BY kind = 'symbol', length(name) LIMIT ?",
-                     (q, limit)).fetchall()
-    rows += c.execute("SELECT id, name, kind FROM entities WHERE lower(name) LIKE '%.' || lower(?) ORDER BY kind = 'symbol', length(name) "
-                      "LIMIT ?", (q, limit)).fetchall()
+    exact = c.execute("SELECT id, name, kind FROM entities WHERE lower(name) = lower(?) ORDER BY kind = 'symbol', length(name) LIMIT ?",
+                      (q, limit)).fetchall()
+    ends = c.execute("SELECT id, name, kind FROM entities WHERE lower(name) LIKE '%.' || lower(?) ORDER BY kind = 'symbol', length(name) "
+                     "LIMIT ?", (q, limit)).fetchall()
+    # the case as typed wins: `Controller` is the class controller.Controller before the module controller
+    rows = [r for r in exact if r[1] == q] + [r for r in ends if r[1].endswith("." + q)] + exact + ends
     terms = rag.query_terms(q)
     if terms:
         match = " AND ".join('"' + t.replace('"', '""') + '"' for t in terms)

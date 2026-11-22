@@ -169,6 +169,10 @@ def test_explore_finds_by_name_and_follows_both_ways():
     assert len(small["nodes"]) == 4 and small["truncated"] is True
     assert graph.explore(index, "zebra") is None
     assert graph.explore(index, "app")["center"]["name"] == "pkg.app"  # a qualified name ending in it
+    root2, index2 = project({"controller.py": "class Controller:\n    pass\n"})
+    graph.build_structure(index2)
+    assert graph.explore(index2, "Controller")["center"]["name"] == "controller.Controller"  # the case as typed wins
+    assert graph.explore(index2, "controller")["center"]["name"] == "controller"
     assert graph.explore(index, "STORAGE")["center"]["kind"] == "section"  # any case, then by words
 
 
