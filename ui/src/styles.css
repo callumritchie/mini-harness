@@ -407,6 +407,9 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
   color: var(--text-2); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
 @media (max-width: 480px) { .source-bar { display: none; } .source-snippet { margin-left: 12px; } }
 .source-match.meaning, .source-match.both { background: var(--accent-surface); color: var(--accent-ink); }
+.source-label { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.source-label .source-where { flex: none; max-width: 100%; }
+.source-heading { font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* explore_graph: one thing's neighbourhood. Kinds take the syntax colours, so they hold in light and dark. */
 .k-module { --k: var(--hl-title); } .k-class { --k: var(--hl-keyword); } .k-function { --k: var(--hl-string); }

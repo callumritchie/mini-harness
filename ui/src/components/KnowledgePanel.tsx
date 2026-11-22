@@ -84,7 +84,7 @@ export function KnowledgePanel() {
         )}
         {!status.embed_installed && (
           <p className="k-help">Keyword search works now. To also find passages that use different words, install the local model's
-            library: <code>pip install -e ".[rag]"</code>, restart, then come back here.</p>
+            library into the Python running this app: <code>{status.embed_install ?? 'pip install -e ".[rag]"'}</code>, restart, then come back here.</p>
         )}
         {status.embed_installed && !status.embed_downloaded && (
           <>

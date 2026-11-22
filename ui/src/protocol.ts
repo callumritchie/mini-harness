@@ -49,6 +49,7 @@ export interface IndexStatus {
   embed_downloaded?: boolean; // its model is on this computer
   embed_model?: string;
   embed_size?: string;
+  embed_install?: string; // the pip command for the Python running the server
   error?: string;
 }
 
@@ -63,6 +64,9 @@ export interface Source {
   match?: "keyword" | "meaning" | "both";
   bm25?: number | null;
   cosine?: number | null;
+  heading?: string; // the Markdown section the passage starts in, as a breadcrumb ("Web UI › Protocol")
+  is_test?: boolean; // from a test file (ranked lower unless the search was about tests)
+  chunk_ids?: string[]; // the passages merged into this one (overlapping windows of one file)
   snippet: string;
 }
 

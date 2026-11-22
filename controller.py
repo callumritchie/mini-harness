@@ -275,8 +275,8 @@ class Controller:
         counts = index.counts()
         lines.append(f"Graph: {counts['entities']:,} things and {counts['edges']:,} links ({g['parsed']} file(s) read, {g['cached']} from cache).")
         if embed_now and not embed.available():
-            raise UserError("\n".join(lines + ["Search by meaning needs the local embedding model: pip install -e \".[rag]\" (it brings "
-                                               f"fastembed and numpy), then /index --embed again. The model ({embed.MODEL_SIZE_NOTE}) is "
+            raise UserError("\n".join(lines + [f"Search by meaning needs the local embedding model: {embed.install_command()} (it brings "
+                                               f"fastembed and numpy), restart, then /index --embed again. The model ({embed.MODEL_SIZE_NOTE}) is "
                                                "downloaded once and runs on this computer; nothing is sent anywhere."]))
         embedder = embed.get(allow_download=embed_now)
         if embedder is not None:
