@@ -172,7 +172,8 @@ def test_the_relevant_file_ranks_first():
     hits = index.search("frozen prefix cache", top_k=3)
     assert hits[0]["path"] == "docs/cache.md" and hits[0]["start_line"] == 1 and hits[0]["end_line"] == 2
     assert [h["score"] for h in hits] == sorted((h["score"] for h in hits), reverse=True) and all(h["score"] >= 0 for h in hits)
-    assert set(hits[0]) == {"chunk_id", "path", "start_line", "end_line", "score", "snippet"} and len(hits[0]["chunk_id"]) == 16
+    assert set(hits[0]) == {"chunk_id", "path", "start_line", "end_line", "score", "match", "bm25", "cosine", "snippet"} and len(hits[0]["chunk_id"]) == 16
+    assert hits[0]["score"] == 1.0 and hits[0]["match"] == "keyword" and hits[0]["cosine"] is None and hits[0]["bm25"] > 0
     assert len(index.search("frozen prefix cache", top_k=1)) == 1
     assert [h["path"] for h in index.search("frozen", path_prefix="src")] == ["src/app.py"]
     assert [h["path"] for h in index.search("frozen", path_prefix="docs/cache.md")] == ["docs/cache.md"]
@@ -199,6 +200,122 @@ def test_a_search_sees_files_changed_by_other_means():
     (root / "b.py").write_text("brand new\n")  # e.g. written by a bash command
     index.last_sync -= rag.RESYNC_SECONDS + 1
     assert [h["path"] for h in index.search("brand")] == ["b.py"]
+
+
+# ---------- embeddings and hybrid search ----------
+
+# The hash embedder only matches words; these synonyms put "warm"/"hot" and "cache"/"memo" in one bucket, so a passage can be
+# found "by meaning" that keyword search cannot find.
+SYN = {"hot": "warm", "memo": "cache", "memoise": "cache"}
+
+
+def test_vectors_are_keyed_by_content_and_never_made_twice():
+    import embed
+    root, index = project({"a.md": "same words\n", "b.md": "same words\n", "c.md": "other text\n"})
+    index.sync()
+    e = embed.HashEmbedder()
+    s = index.embed_pending(e)
+    assert s == {"embedded": 2, "total": 2, "stopped": False} and e.calls == 2  # a.md and b.md share one vector
+    assert index.embedded(e) == 3 and index.embed_pending(e)["embedded"] == 0 and e.calls == 2
+    touch_later(root / "c.md", "changed text\n")
+    index.sync()
+    assert index.embed_pending(e)["embedded"] == 1 and e.calls == 3
+    (root / "a.md").unlink(); (root / "b.md").unlink()
+    index.sync()  # the shared vector's passages are gone: so is the vector
+    assert index.conn().execute("SELECT count(*) FROM embeddings").fetchone()[0] == 1
+    other = embed.HashEmbedder(dim=64)  # another model never mixes with this one
+    assert index.embedded(other) == 0 and index.embed_pending(other)["embedded"] == 1
+
+
+def test_embedding_can_be_stopped_and_only_one_job_runs():
+    import embed
+    root, index = project({f"f{i}.md": f"word{i}\n" for i in range(10)})
+    index.sync()
+    stop = threading.Event(); stop.set()
+    assert index.embed_pending(embed.HashEmbedder(), cancel=stop)["stopped"] is True
+    with index.embed_lock:
+        assert index.embed_pending(embed.HashEmbedder()) is None
+    assert index.embed_pending(embed.HashEmbedder(), batch=3)["embedded"] == 10
+
+
+def test_hybrid_finds_by_words_and_by_meaning():
+    import embed
+    root, index = project({
+        "keep.md": "Keep the memo hot between calls.\n",      # the meaning: only via the synonyms
+        "rule.md": "The cache must stay warm: never edit what was sent.\n",  # the words and the meaning
+        "other.md": "Unrelated text about deployment.\n",
+    })
+    index.sync()
+    e = embed.HashEmbedder(synonyms=SYN)
+    assert [h["path"] for h in index.search("warm cache", embedder=e)] == ["rule.md"]  # nothing embedded yet: keyword only
+    index.embed_pending(e)
+    hits, used = index.query("warm cache", embedder=e)
+    assert used == "hybrid" and [h["path"] for h in hits[:2]] == ["rule.md", "keep.md"]
+    assert hits[0]["match"] == "both" and hits[0]["score"] > 0.9 and hits[0]["bm25"] > 0 and hits[0]["cosine"] > 0  # 2nd by meaning
+    assert hits[1]["match"] == "meaning" and hits[1]["bm25"] is None and 0 < hits[1]["score"] < 1
+    assert "other.md" not in [h["path"] for h in hits]  # below the similarity floor
+    assert [h["path"] for h in index.search("warm cache", mode="keyword", embedder=e)] == ["rule.md"]
+    meaning, used = index.query("warm cache", mode="meaning", embedder=e)
+    assert used == "meaning" and {h["path"] for h in meaning} == {"rule.md", "keep.md"} and all(h["match"] == "meaning" for h in meaning)
+    assert index.query("warm cache", mode="meaning")[1] == "keyword"  # no embedder: falls back, and says so
+    assert [h["path"] for h in index.search("hot", path_prefix="rule.md", embedder=e)] == ["rule.md"]
+
+
+def test_vector_math_with_and_without_numpy():
+    import embed
+    vecs = [embed.normalise([1, 0, 0]), embed.normalise([1, 1, 0]), embed.normalise([0, 0, 1])]
+    blobs = [embed.pack(v) for v in vecs]
+    q = embed.normalise([1, 0.1, 0])
+    with_np = embed.top_k_cosine(q, blobs, 2)
+    real = sys.modules.get("numpy")
+    sys.modules["numpy"] = None  # import numpy now fails: the pure-Python path
+    try:
+        without = embed.top_k_cosine(q, blobs, 2)
+    finally:
+        sys.modules["numpy"] = real
+        if real is None:
+            del sys.modules["numpy"]
+    assert [i for i, _ in with_np] == [i for i, _ in without] == [0, 1]
+    assert all(abs(a[1] - b[1]) < 1e-5 for a, b in zip(with_np, without))
+    assert embed.top_k_cosine(q, [], 3) == []
+
+
+def test_searches_while_embedding():
+    import embed
+    files = {f"doc{i}.md": f"topic words number{i}\n" for i in range(80)}
+    root, index = project(files)
+    index.sync()
+    e = embed.HashEmbedder()
+    errors = []
+
+    def searcher():
+        try:
+            for _ in range(20):
+                index.search("topic words", embedder=e)
+        except Exception as ex:  # noqa: BLE001
+            errors.append(ex)
+
+    threads = [threading.Thread(target=searcher) for _ in range(4)] + [threading.Thread(target=lambda: index.embed_pending(e, batch=5))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    assert not errors, errors
+    assert index.embedded(e) == 80 and index.search("number7", mode="meaning", embedder=e)[0]["path"] == "doc7.md"
+
+
+def test_real_model_when_asked():
+    """Opt-in (MINI_HARNESS_TEST_REAL_EMBED=1 with the [rag] extra installed): the real local model finds a paraphrase."""
+    import embed
+    if not os.environ.get("MINI_HARNESS_TEST_REAL_EMBED"):
+        return
+    root, index = project({"cache.md": "Never change what was already sent to the model, so the prompt cache stays valid.\n",
+                           "deploy.md": "Run the release script, then tag the commit.\n"})
+    index.sync()
+    e = embed.LocalEmbedder()
+    index.embed_pending(e)
+    hits, used = index.query("keeping cached prompts reusable", mode="meaning", embedder=e)
+    assert used == "meaning" and hits[0]["path"] == "cache.md", hits
 
 
 # ---------- threads ----------
