@@ -3,6 +3,15 @@ import type { Source } from "../protocol";
 import { useStore } from "../store";
 import { Icon } from "./Icon";
 
+/** What a score means, for the tooltip: the fused rank, and the raw scores of the rankings that found the passage. */
+function scoreTitle(s: Source): string {
+  if (s.score < 0.01) return "Score near 0: the words searched for are in almost every passage, so they barely tell passages apart";
+  const parts = [`Score ${s.score.toFixed(2)} (1 = first in every ranking used; only comparable within this search)`];
+  if (s.bm25 != null) parts.push(`keyword match (BM25) ${s.bm25.toFixed(2)}`);
+  if (s.cosine != null) parts.push(`meaning (cosine similarity) ${s.cosine.toFixed(2)}`);
+  return parts.join(" · ");
+}
+
 /** The passages a search_docs call found, best first: where each is, how well it matched next to the best one, its text on
  *  request, and a way to open it in the Files tab at those lines. Snippets are file text: shown as text, never as markup. */
 export function Sources({ sources }: { sources: Source[] }) {
@@ -26,9 +35,8 @@ export function Sources({ sources }: { sources: Source[] }) {
               </button>
               <span className="source-rank">{i + 1}</span>
               <button className="source-where" onClick={() => show(s)} title={`Open ${where} in Files`}>{where}</button>
-              <span className="source-score" title={s.score < 0.01
-                ? "Score near 0: the words searched for are in almost every passage, so they barely tell passages apart"
-                : `Score ${s.score.toFixed(2)}: keyword match (BM25), only comparable within this search`}>
+              {s.match && s.match !== "keyword" && <span className={`chip source-match ${s.match}`}>{s.match === "both" ? "words + meaning" : "meaning"}</span>}
+              <span className="source-score" title={scoreTitle(s)}>
                 <span className="source-bar" aria-hidden><span style={{ width: `${Math.round(Math.max(share, 0.04) * 100)}%` }} /></span>
                 <span className="source-num">{s.score < 0.01 ? "<0.01" : s.score.toFixed(2)}</span>
               </span>

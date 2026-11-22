@@ -7,6 +7,7 @@ import { ToolIcon } from "./ToolIcon";
 import { Spinner } from "./Spinner";
 import { DiffRows } from "./DiffView";
 import { Sources } from "./Sources";
+import { GraphCard } from "./GraphCard";
 
 const LIMIT = 4000;
 const MCP_MARK = "[output from MCP server";
@@ -90,7 +91,9 @@ export function ToolCard({ item }: { item: ToolItem }) {
             </div>
           )}
           {/* search_docs: the ranked passages instead of the text written for the model (Copy output still copies that) */}
-          {item.sources?.length ? <Sources sources={item.sources} /> : item.result !== null && (
+          {item.sources?.length ? <Sources sources={item.sources} />
+            : item.graph ? <GraphCard graph={item.graph} inTool onPick={(name) => patch({ rightTab: "knowledge", rightOpen: true, knowledgeQuery: name })} />
+            : item.result !== null && (
             <>
               {mcp && <div className="mcp-banner">{result.split("\n", 1)[0]}</div>}
               <pre className="tool-out">{mcp ? shown.slice(shown.indexOf("\n") + 1) : shown}</pre>
@@ -103,7 +106,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
               <button className="btn btn-sm" onClick={() => patch({ rightTab: "changes", rightOpen: true, selectedChange: path })}>Open in Changes</button>
             )}
             <button className="btn-text" onClick={() => setShowInput(!showInput)} aria-expanded={showInput}>{showInput ? "Hide input JSON" : "Show input JSON"}</button>
-            {!more && !item.sources?.length && result.length > LIMIT && (
+            {!more && !item.sources?.length && !item.graph && result.length > LIMIT && (
               <>
                 <span className="spacer" />
                 <span className="tool-meta">Showing the first {LIMIT.toLocaleString()} characters</span>

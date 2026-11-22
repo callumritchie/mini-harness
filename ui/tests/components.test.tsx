@@ -175,6 +175,14 @@ describe("ToolCard for search_docs", () => {
     expect(useStore.getState()).toMatchObject({ rightTab: "files", rightOpen: true, selectedFile: "src/app.py", selectedRange: { start: 1, end: 2 } });
   });
 
+  it("says which ranking found a passage when meaning was used", () => {
+    const { container } = render(<ToolCard item={{ ...search, sources: [{ ...sources[1], match: "both", bm25: 2.1, cosine: 0.71 },
+      { ...sources[0], match: "meaning", bm25: null, cosine: 0.6 }, { ...sources[0], chunk_id: "c3", path: "x.py", match: "keyword", bm25: 1.2, cosine: null }] }} />);
+    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
+    expect([...container.querySelectorAll(".source-match")].map((c) => c.textContent)).toEqual(["words + meaning", "meaning"]);
+    expect(container.querySelector(".source-score")?.getAttribute("title")).toContain("meaning (cosine similarity) 0.71");
+  });
+
   it("says a near-zero score is near zero instead of 0.00", () => {
     const { container } = render(<ToolCard item={{ ...search, sources: [{ ...sources[0], score: 0.000003 }] }} />);
     fireEvent.click(screen.getByText("search_docs(frozen prefix)"));

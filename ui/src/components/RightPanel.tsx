@@ -3,10 +3,12 @@ import { useStore, type RightTab } from "../store";
 import { ChangesPanel } from "./ChangesPanel";
 import { ContextPanel } from "./ContextPanel";
 import { FilesPanel } from "./FilesPanel";
+import { KnowledgePanel } from "./KnowledgePanel";
 
 const TABS: { id: RightTab; label: string }[] = [
   { id: "files", label: "Files" },
   { id: "changes", label: "Changes" },
+  { id: "knowledge", label: "Knowledge" },
   { id: "context", label: "Context" },
 ];
 
@@ -67,6 +69,7 @@ export function RightPanel() {
       <div className="panel-body">
         {tab === "files" && <FilesPanel />}
         {tab === "changes" && <ChangesPanel />}
+        {tab === "knowledge" && <KnowledgePanel />}
         {tab === "context" && <ContextPanel />}
       </div>
     </aside>
