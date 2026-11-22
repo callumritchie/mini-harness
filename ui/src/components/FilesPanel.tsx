@@ -62,6 +62,8 @@ function Cant({ icon, title, children }: { icon: IconName; title: string; childr
 function Viewer({ path, onBack }: { path: string; onBack: () => void }) {
   const [state, setState] = useState<{ content?: string; binary?: boolean; truncated?: boolean; error?: string }>({});
   const changed = useStore((s) => Boolean(s.changes[path]));
+  const wrap = useStore((s) => s.wrap);
+  const toggleWrap = useStore((s) => s.toggleWrap);
   const patch = useStore((s) => s.patch);
   useEffect(() => {
     let live = true;
@@ -80,12 +82,13 @@ function Viewer({ path, onBack }: { path: string; onBack: () => void }) {
         <button className="btn-icon back" onClick={onBack} aria-label="Back to files" title="Back to files"><Icon name="back" /></button>
         <span className="path">{path}</span>
         {state.content !== undefined && <span className="vmeta">{lines.length.toLocaleString()} line{lines.length === 1 ? "" : "s"}</span>}
+        {state.content !== undefined && <button className="btn btn-xs" onClick={toggleWrap} aria-pressed={wrap} title="Wrap long lines">Wrap</button>}
         {changed && <button className="btn btn-sm" onClick={() => patch({ rightTab: "changes", selectedChange: path })}>See changes</button>}
       </div>
       {state.error && <div className="cant-wrap"><Cant icon="alert-circle" title={path}>{state.error}</Cant></div>}
       {state.binary && <div className="cant-wrap"><Cant icon="file" title={path}>Binary file: there's no text to show.</Cant></div>}
       {state.content !== undefined && (
-        <div className="code">
+        <div className={`code ${wrap ? "wrap" : "nowrap"}`}>
           {lines.map((l, i) => (
             <div key={i} className="row"><span className="no">{i + 1}</span><code><CodeLine text={l} lang={lang} /></code></div>
           ))}

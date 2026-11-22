@@ -91,6 +91,8 @@
   --note-bg: #FFFBEB;  --note-line: #F5D08A;  --note-ink: #78350F;
   --ok-line: #86EFAC;
   --add-text: #166534;
+  --add-strong: #A7F0C0;      /* the changed words inside an added line */
+  --del-strong: #FBC4C4;      /* the changed words inside a removed line */
   --del-text: #991B1B;
   --bad-ink: #991B1B;
   --mark-bg: #FEF3C7;
@@ -176,6 +178,8 @@
     --note-bg: #1F1C17;  --note-line: #3A3020;  --note-ink: #E6DCC8;
     --ok-line: #1F4A33;
     --add-text: #B8EBCD;
+    --add-strong: #24573C;
+    --del-strong: #5C2626;
     --del-text: #F5C2C2;
     --bad-ink: #F5C2C2;
     --mark-bg: #3A2E14;

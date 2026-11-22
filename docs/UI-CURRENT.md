@@ -103,13 +103,15 @@ A `role="log"` (`aria-live="polite"`) with a 720px column and 20px rhythm. Auto-
   header: "Ran 3 subagents in parallel · read-only · 3 / 3 done".
 - **Row layout:** `[status] [icon] [display, mono, ellipsis] [outcome] [who] [chevron]`.
   - Status: ✓, ✕, a spinner, or the accent dot when the open approval is about this call (matched by `tool_id`).
-  - Outcome: the server's few words ("612 lines", "3 matches", "exit 1", "new file", "answered: Go"), or `+a −d` for edits and writes.
+  - Outcome: the server's few words ("612 lines", "3 matches", "exit 1", "new file", "answered: Go"), or `+a −d` for edits and writes, counting
+    **this call's own change** (the Changes tab shows the whole session's).
   - Who: a chip when someone approved it ("you allowed", "judge allowed", "allowed by rule").
 - **Denied:** the display is struck through, with a "you denied" or "judge denied" chip. The text written for the model stays in the
   expanded view.
 - **Failed:** the first line of the server's message (its "what to try next") sits under the row in a soft red.
 - **Subagent rows:** "[n] ↳ latest step · finished: N model calls, $x" under the row, from `subagent_step` and `subagent_finish`.
-- **Expanded:** a `$ command` block for bash, then an inline diff for edits and writes, then the MCP provenance banner and the result.
+- **Expanded:** a `$ command` block for bash, then an inline diff of this call's own change (always wrapped, folded context opens in place),
+  then the MCP provenance banner and the result. A reloaded transcript has no per-call change, so it shows no inline diff.
   - Its footer holds Copy output, Open in Changes, Show input JSON, and for long output "Showing the first 4,000 characters" + "Show the
     other 9,412".
 
@@ -131,11 +133,17 @@ A `role="log"` (`aria-live="polite"`) with a 720px column and 20px rhythm. Auto-
 - **Tabs:** a content-sized tray (`role="tablist"`): Files, Changes (neutral count), Context.
 - **Files:** a filter field with refresh, a tree (26px rows, SVG chevrons, NEW / M in colour on the right, secrets `disabled` with a lock and
   "<name>, Locked"), and a read-only note.
-  - **Viewer:** back ("Back to files"), path, line count, "See changes" when the file changed this session, and highlighted code.
+  - **Viewer:** back ("Back to files"), path, line count, Wrap, "See changes" when the file changed this session, and highlighted code.
   - Binary, cut-off and unreadable files show as cards.
 - **Changes:** files with `+a −d` (new files: "+N" and NEW).
   - A meta row: the `new file`/`modified` tag, "Since the start of this session · latest version", Copy diff.
-  - The diff: two line-number gutters, `@@` hunk headers, tinted add/del rows without syntax colour.
+  - The diff: a grid of old and new line numbers, a coloured `−`/`+` sign column, the line, and `@@` hunk headers.
+    - Removed and added rows are tinted, without syntax colour.
+    - When a removed line is replaced by an added one, the words that changed are marked (`--del-strong` and struck through on the
+      removed side, `--add-strong` on the added side).
+    - Folded context ("⋯ 12 unchanged lines") opens in place.
+    - The meta row shows `+a −d` and a **Wrap** toggle (on by default, shared with the file viewer, remembered in this browser). With wrap
+      on, long lines wrap under their text and the gutters stay put; with it off they scroll sideways.
   - Empty: a card that says resumed sessions and shell changes aren't tracked.
 - **Context:**
   - **Last request:** the number, % of the window and of the compaction limit, and a bar in three neutral segments (setup, conversation,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffRows, diffStats } from "../src/lib/diff";
+import { diffRows, diffStats, pairChanges } from "../src/lib/diff";
 import { formatCost, formatTokens, languageFor } from "../src/lib/lang";
 
 describe("diffRows", () => {
@@ -38,5 +38,32 @@ describe("formatting", () => {
     expect(languageFor("src/app.py")).toBe("python");
     expect(languageFor("Dockerfile")).toBe("dockerfile");
     expect(languageFor("notes")).toBeUndefined();
+  });
+});
+
+describe("diff details", () => {
+  it("shows an emptied file as all removals", () => {
+    const rows = diffRows("a\nb\n", "");
+    expect(rows.map((r) => r.type)).toEqual(["del", "del"]);
+    expect(diffStats(rows)).toEqual({ added: 0, removed: 2 });
+  });
+
+  it("keeps a folded gap's lines so the view can open them", () => {
+    const before = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n") + "\n";
+    const after = before.replace("line 0\n", "line zero\n").replace("line 19\n", "line nineteen\n");
+    const gap = diffRows(before, after).find((r) => r.type === "gap")!;
+    expect(gap.hidden?.length).toBe(12);
+    expect(gap.hidden?.[0]).toMatchObject({ type: "ctx", text: "line 4", oldNo: 5, newNo: 5 });
+  });
+
+  it("marks the words that changed between a removed line and the one that replaced it", () => {
+    const rows = pairChanges(diffRows("keep\nA folder for demo use.\n", "keep\nA folder for the demo mode.\nNew line.\n"));
+    const del = rows.find((r) => r.type === "del")!;
+    const [add, extra] = rows.filter((r) => r.type === "add");
+    expect(del.parts?.filter((p) => p.changed).map((p) => p.text.trim()).join("|")).toBe("use");
+    expect(add.parts?.filter((p) => p.changed).map((p) => p.text.trim()).join("|")).toBe("the|mode");
+    expect(del.parts?.map((p) => p.text).join("")).toBe(del.text);
+    expect(add.parts?.map((p) => p.text).join("")).toBe(add.text);
+    expect(extra.parts).toBeUndefined(); // an added line with nothing to pair with gets no marks
   });
 });

@@ -149,6 +149,24 @@ test("the whole demo walk-through", async ({ page }) => {
   await idle();
   await page.screenshot({ path: shot("11-tool-group") });
 
+  // a modified file: the row counts this call's own change, and the diff shows the removal with the changed words marked
+  await say("edit");
+  await idle();
+  const editRow = page.locator(".tool", { hasText: "edit_file(README.md: replace 'This" }).last();
+  await expect(editRow.locator(".tool-outcome")).toHaveText("+2 −1");
+  await page.getByRole("tab", { name: /Changes/ }).click();
+  await page.locator(".change-list button", { hasText: "README.md" }).click();
+  await expect(page.locator(".diff .row.del")).toHaveCount(1);
+  await expect(page.locator(".diff .row.del .dchg")).toContainText("throwaway");
+  await expect(page.locator(".diff .row.add .dchg").first()).toBeVisible();
+  await expect(page.locator(".diff-body.wrap")).toBeVisible();
+  await page.screenshot({ path: shot("19-diff-modified") });
+  await page.setViewportSize({ width: 420, height: 800 }); // the side panel becomes a drawer; long lines wrap inside it
+  await page.getByRole("button", { name: "Close sessions" }).click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+  await page.screenshot({ path: shot("20-diff-narrow") });
+  await page.setViewportSize({ width: 1440, height: 900 });
+
   for (const [width, name] of [[1024, "12-narrow-1024"], [700, "13-narrow-700"], [420, "14-narrow-420"]] as const) {
     await page.setViewportSize({ width, height: 800 });
     await page.reload(); // a fresh load at this width: the drawers start closed, and the session comes back from the server

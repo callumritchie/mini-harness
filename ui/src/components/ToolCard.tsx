@@ -5,6 +5,7 @@ import { diffRows, diffStats } from "../lib/diff";
 import { Icon } from "./Icon";
 import { ToolIcon } from "./ToolIcon";
 import { Spinner } from "./Spinner";
+import { DiffRows } from "./DiffView";
 
 const LIMIT = 4000;
 const MCP_MARK = "[output from MCP server";
@@ -28,7 +29,8 @@ export function ToolCard({ item }: { item: ToolItem }) {
   const waiting = useStore((s) => (s.permission ? waitingId(s.items, s.permission.toolId) : null)) === item.id;
   const path = typeof item.input.path === "string" ? item.input.path : null;
   const editsFile = (item.name === "write_file" || item.name === "edit_file") && path;
-  const change = useStore((s) => (editsFile && path ? s.changes[path] : undefined));
+  // this call's own change; the session's whole change to the file is in the Changes tab
+  const change = editsFile ? item.change : undefined;
   const rows = useMemo(() => (change ? diffRows(change.before, change.after) : null), [change]);
   const stats = rows ? diffStats(rows) : null;
   const result = item.result ?? "";
@@ -82,16 +84,8 @@ export function ToolCard({ item }: { item: ToolItem }) {
         <div className="tool-body">
           {command !== null && <pre className="tool-cmd"><span className="muted">$ </span>{command}</pre>}
           {rows && !item.isError && (
-            <div className="tool-diff" role="table" aria-label={`Changes to ${path}`}>
-              {rows.map((r, i) =>
-                r.type === "gap" ? <div key={i} className="drow gap">⋯ {r.text}</div> : (
-                  <div key={i} className={`drow ${r.type}`}>
-                    <span className="dno">{r.type === "add" ? r.newNo : r.oldNo ?? r.newNo}</span>
-                    <span className="dsign">{r.type === "add" ? "+" : r.type === "del" ? "−" : " "}</span>
-                    <code>{r.text || " "}</code>
-                  </div>
-                ),
-              )}
+            <div className="diff tool-diff" aria-label={`What this call changed in ${path}`}>
+              <DiffRows rows={rows} wrap headers={false} />
             </div>
           )}
           {item.result !== null && (

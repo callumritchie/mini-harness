@@ -45,6 +45,7 @@ export type Item =
       group?: string | null; // calls from one reply that ran at the same time share this
       index?: number | null; // a parallel subagent's number ([1]..[4])
       steps?: string[]; // what a subagent did, step by step
+      change?: { before: string | null; after: string | null }; // what this call did to its file (the Changes tab shows the whole session)
       finish?: { calls: number; cost: number | null };
     }
   | { kind: "notice"; id: string; text: string; tone?: "stopped" | "unfinished" | "cutoff" }
@@ -90,11 +91,21 @@ export interface ChatState {
   selectedFile: string | null;
   showGoal: boolean;
   confirmAllow: boolean;
+  wrap: boolean; // wrap long lines in diffs and the file viewer (remembered in this browser)
   /** a denial whose tool result has not arrived yet; until the server sends tool ids, the next error result is taken to be that call */
   denial: "user" | "judge" | null;
   draft: string | null; // text a starter button wants put in the message box
   goalRun: GoalRun | null; // the goal started from this page, until its result arrives
   goalLive: GoalLive | null; // the running goal's steps, from the server's goal events
+}
+
+const WRAP_KEY = "mini-harness-wrap";
+function readWrap(): boolean {
+  try {
+    return localStorage.getItem(WRAP_KEY) !== "0";
+  } catch {
+    return true;
+  }
 }
 
 let counter = 0;
@@ -119,6 +130,7 @@ export const initialState: ChatState = {
   selectedFile: null,
   showGoal: false,
   confirmAllow: false,
+  wrap: true,
   denial: null,
   draft: null,
   goalRun: null,
@@ -251,10 +263,20 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       return { ...s, denial: /^\s*judge: deny/.test(ev.text) ? "judge" : s.denial, items: [...s.items, { kind: "notice", id: nextId("n"), text: ev.text }] };
     case "file_change": {
       const existing = s.changes[ev.path];
+      // the write or edit that made this change is the latest one still running on that path (the server sends it mid-call)
+      let owner = -1;
+      for (let i = s.items.length - 1; i >= 0; i--) {
+        const it = s.items[i];
+        if (it.kind === "tool" && it.status === "running" && (it.name === "write_file" || it.name === "edit_file") && it.input.path === ev.path) {
+          owner = i;
+          break;
+        }
+      }
       return {
         ...s,
         changes: { ...s.changes, [ev.path]: { before: existing ? existing.before : ev.before, after: ev.after } },
         selectedChange: ev.path,
+        items: owner < 0 ? s.items : s.items.map((it, i) => (i === owner ? { ...it, change: { before: ev.before, after: ev.after } } : it)),
       };
     }
     case "permission_request":
@@ -341,6 +363,7 @@ interface Actions {
   compact(focus?: string): void;
   goal(text: string, verify?: string, maxTurns?: number): void;
   patch(partial: Partial<ChatState>): void;
+  toggleWrap(): void;
 }
 
 let socket: Socket | null = null;
@@ -357,11 +380,21 @@ export const useStore = create<ChatState & Actions>((set, get) => {
 
   return {
     ...initialState,
+    wrap: readWrap(),
     apply: (ev) => set((s) => reduce(s, ev)),
     setSocket: (sock) => {
       socket = sock;
     },
     patch: (partial) => set(partial),
+    toggleWrap() {
+      const wrap = !get().wrap;
+      set({ wrap });
+      try {
+        localStorage.setItem(WRAP_KEY, wrap ? "1" : "0");
+      } catch {
+        /* not remembered */
+      }
+    },
     submit(raw) {
       const text = raw.trim();
       if (!text) return;

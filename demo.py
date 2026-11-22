@@ -15,6 +15,7 @@ Keywords for reviewing every state (used by the screenshot test; they are not in
   helpers           three subagent calls in one reply
   fail              edit_file on a file that was not read first (an error with advice)
   cut               a reply that stops at the maximum length
+  edit              reads README.md, then edits a line of it (a diff with a removal, additions and context)
   anything else     echoes your message
 """
 import itertools
@@ -63,12 +64,29 @@ def _last_user_text(messages):
     return content, None
 
 
+def _last_typed(messages):
+    """The latest thing the person typed, looking past tool results."""
+    for m in reversed(messages):
+        if m["role"] != "user":
+            continue
+        text, results = _last_user_text([m])
+        if results is None:
+            return text or ""
+    return ""
+
+
+EDIT_OLD = "This is a throwaway folder for `--demo`."
+EDIT_NEW = "This is a scratch folder for the `--demo` mode, made fresh each time.\nNothing in it is kept."
+
+
 def script(messages):
     """The blocks the demo model replies with, and the stop reason."""
     text, results = _last_user_text(messages)
     if results is not None:  # we just got tool results: wrap up
         first = results[0]
         content = str(first.get("content", ""))
+        if not first.get("is_error") and "Demo folder" in content and "edit" in _last_typed(messages).lower():
+            return [_text("Now I'll change that line."), _tool("edit_file", path="README.md", old_string=EDIT_OLD, new_string=EDIT_NEW)], "tool_use"
         if first.get("is_error"):
             return [_text(f"That didn't run:\n\n> {content[:300]}\n\nNothing was changed.")], "end_turn"
         if "Created" in content or "Overwrote" in content:
@@ -88,6 +106,8 @@ def script(messages):
         return [_text("I'll edit a file I have not read."), _tool("edit_file", path="README.md", old_string="Demo", new_string="Example")], "tool_use"
     if "cut" in t:
         return [_text(CUT)], "max_tokens"
+    if "edit" in t:
+        return [_text("I'll read the README first, then edit it."), _tool("read_file", path="README.md")], "tool_use"
     if any(w in t for w in ("delete", "remove", "rm ")):
         return [_text("I'll delete it with a shell command, which needs your approval."), _tool("bash", command="rm demo.py")], "tool_use"
     if any(w in t for w in ("create", "write", "make a file")):

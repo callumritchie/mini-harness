@@ -262,6 +262,19 @@ Kept deliberately different from the boards: no chevron on the brand row (there 
 initial, no wrapping in the code viewer, setup items listed separately from "Conversation" in the Context breakdown (the board nested them
 by mistake).
 
+## Phase 13: a better diff view
+
+Lines did not wrap, and no screenshot had ever shown a removal (the demo only created a new file). Phase 13:
+
+- **Demo and e2e:** a demo keyword `edit` (read README.md, then change a line), and e2e steps `19-diff-modified` and `20-diff-narrow`.
+- **Wrapping:** wrap on by default in diffs and the file viewer, with a shared **Wrap** toggle remembered in `localStorage`. Diff rows are a
+  grid, so wrapped lines hang under their text.
+- **Removals:** a sign column, word-level marks between a removed line and the one that replaced it (`pairChanges`, `diffWordsWithSpace`),
+  new `--add-strong` / `--del-strong` tokens, and `+a −d` back in the meta row.
+- **Context:** folded context opens in place (gaps keep their hidden lines).
+- **Tool cards:** they show their own call's change (the store attaches each `file_change` to the running write/edit for that path), not
+  the session's.
+
 ## Server asks (small, additive; none weakens UX-SPEC §5)
 
 1. **`tool_id` on `permission_request`**, and a `decided_by: "rule" | "judge" | "user" | null` on `tool_result`.

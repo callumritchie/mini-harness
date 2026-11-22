@@ -121,8 +121,9 @@ describe("ToolCard", () => {
   });
 
   it("shows the first line of an error under the row, and the +/- counts of a write", () => {
-    useStore.setState({ changes: { "a.py": { before: "x\n", after: "y\nz\n" } } });
-    const { container } = render(<ToolCard item={item} />);
+    // the counts are this call's own change, not the session's whole change to the file
+    useStore.setState({ changes: { "a.py": { before: null, after: "a\nb\nc\nd\n" } } });
+    const { container } = render(<ToolCard item={{ ...item, change: { before: "x\n", after: "y\nz\n" } }} />);
     expect(container.querySelector(".tool-outcome")?.textContent).toBe("+2 −1");
     cleanup();
     render(<ToolCard item={{ ...item, isError: true, result: "Could not write a.py.\nTry again." }} />);
@@ -271,5 +272,30 @@ describe("session search", () => {
     const rows = [row("a", "Fix the tests"), row("b", "GOAL: tidy the README"), row("c", "Explore")];
     expect(searchSessions(rows, "readme").map((r) => r.id)).toEqual(["b"]);
     expect(searchSessions(rows, "  ").map((r) => r.id)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("DiffView details", () => {
+  it("shows removals with a sign and the changed words marked, and remembers the wrap setting", () => {
+    const { container } = render(<DiffView path="a.md" before={"A folder for demo use.\n"} after={"A folder for the demo mode.\n"} />);
+    expect(container.querySelector(".row.del .sign")?.textContent).toBe("−");
+    expect(container.querySelector(".row.del .dchg")).not.toBeNull();
+    expect(container.querySelector(".row.add .dchg")).not.toBeNull();
+    expect(container.querySelector(".diff-body.wrap")).not.toBeNull();
+    fireEvent.click(screen.getByText("Wrap"));
+    expect(container.querySelector(".diff-body.nowrap")).not.toBeNull();
+    expect(localStorage.getItem("mini-harness-wrap")).toBe("0");
+    fireEvent.click(screen.getByText("Wrap"));
+    expect(localStorage.getItem("mini-harness-wrap")).toBe("1");
+  });
+
+  it("opens folded context in place", () => {
+    const before = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n") + "\n";
+    const after = before.replace("line 0\n", "line zero\n").replace("line 19\n", "line nineteen\n");
+    const { container } = render(<DiffView path="a.txt" before={before} after={after} />);
+    expect(screen.queryByText("line 9")).toBeNull();
+    fireEvent.click(screen.getByText(/12 unchanged lines/));
+    expect(screen.getByText("line 9")).toBeTruthy();
+    expect(container.querySelectorAll(".hunk")).toHaveLength(2);
   });
 });

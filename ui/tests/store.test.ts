@@ -147,3 +147,17 @@ describe("structured events from the server", () => {
     expect((s.items[0] as { goal: { lines: unknown[] } }).goal.lines).toHaveLength(3);
   });
 });
+
+describe("each write keeps its own change", () => {
+  it("gives two edits of one file their own before and after, and the Changes tab the whole session", () => {
+    const edit = (id: string) => ({ type: "tool_call" as const, id, name: "edit_file", input: { path: "a.py" }, display: "edit_file(a.py)" });
+    const done = (id: string) => ({ type: "tool_result" as const, id, name: "edit_file", text: "ok", is_error: false });
+    const s = run([
+      edit("e1"), { type: "file_change", path: "a.py", before: "1\n", after: "2\n" }, done("e1"),
+      edit("e2"), { type: "file_change", path: "a.py", before: "2\n", after: "3\n" }, done("e2"),
+    ]);
+    expect(s.items[0]).toMatchObject({ change: { before: "1\n", after: "2\n" } });
+    expect(s.items[1]).toMatchObject({ change: { before: "2\n", after: "3\n" } });
+    expect(s.changes["a.py"]).toEqual({ before: "1\n", after: "3\n" });
+  });
+});
