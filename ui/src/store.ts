@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Approval, ClientRequest, CostSummary, Info, Mode, ServerEvent, SessionRow, TranscriptItem, Usage } from "./protocol";
+import type { Approval, AttachmentRef, ClientRequest, CostSummary, Info, Mode, ServerEvent, SessionRow, TranscriptItem, Uploaded, Usage } from "./protocol";
 import type { RoundLine } from "./lib/goal";
 import type { Socket } from "./socket";
 
@@ -25,9 +25,23 @@ export interface GoalResult extends Omit<GoalRun, "costAtStart"> {
   complete: boolean;
 }
 
+/** A file shown on a sent message: a thumbnail only for images sent from this page (a reloaded session has names only). */
+export type SentFile = AttachmentRef & { preview?: string };
+/** A file in the message box: uploading, uploaded (it has the server's id), or refused (the reason). */
+export interface PendingFile {
+  key: string;
+  name: string;
+  size: number;
+  kind?: Uploaded["kind"];
+  preview?: string;
+  id?: string;
+  error?: string;
+}
+
 export type Item =
-  | { kind: "user"; id: string; text: string }
+  | { kind: "user"; id: string; text: string; attachments?: SentFile[] }
   | { kind: "assistant"; id: string; text: string; streaming: boolean; goal?: GoalResult }
+  | { kind: "thinking"; id: string; text: string; streaming: boolean }
   | {
       kind: "tool";
       id: string;
@@ -70,6 +84,11 @@ export interface AskRequest {
   choices: string[];
 }
 
+export interface PlanRequest {
+  id: string;
+  plan: string;
+}
+
 export type RightTab = "files" | "changes" | "context";
 
 export interface ChatState {
@@ -82,6 +101,7 @@ export interface ChatState {
   totalCost: CostSummary | null;
   permission: PermissionRequest | null;
   ask: AskRequest | null;
+  plan: PlanRequest | null; // a plan waiting for approval (exit_plan_mode)
   changes: Record<string, { before: string | null; after: string | null }>;
   sessions: SessionRow[];
   rightTab: RightTab;
@@ -121,6 +141,7 @@ export const initialState: ChatState = {
   totalCost: null,
   permission: null,
   ask: null,
+  plan: null,
   changes: {},
   sessions: [],
   rightTab: "files",
@@ -148,16 +169,18 @@ export function describeCall(name: string, input: Record<string, unknown>): stri
 }
 
 function finishStreaming(items: Item[]): Item[] {
-  return items.map((i) => (i.kind === "assistant" && i.streaming ? { ...i, streaming: false } : i));
+  return items.map((i) => ((i.kind === "assistant" || i.kind === "thinking") && i.streaming ? { ...i, streaming: false } : i));
 }
 
 export function fromTranscript(items: TranscriptItem[]): Item[] {
   return items.map((t): Item => {
     switch (t.kind) {
       case "user":
-        return { kind: "user", id: nextId("u"), text: t.text };
+        return { kind: "user", id: nextId("u"), text: t.text, ...(t.attachments?.length ? { attachments: t.attachments } : {}) };
       case "assistant":
         return { kind: "assistant", id: nextId("a"), text: t.text, streaming: false };
+      case "thinking":
+        return { kind: "thinking", id: nextId("t"), text: t.text, streaming: false };
       case "summary":
         return { kind: "summary", id: nextId("s"), text: t.text };
       case "tool":
@@ -209,13 +232,20 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       return { ...s, info: ev.info, totalCost: ev.info.cost };
     case "status":
       return { ...s, running: ev.running };
-    case "text_delta": {
+    case "text_delta":
+    case "thinking_delta": {
+      const kind = ev.type === "text_delta" ? "assistant" : "thinking";
       const last = s.items[s.items.length - 1];
-      if (last && last.kind === "assistant" && last.streaming) {
+      if (last && last.kind === kind && last.streaming) {
         return { ...s, items: [...s.items.slice(0, -1), { ...last, text: last.text + ev.text }] };
       }
-      return { ...s, items: [...s.items, { kind: "assistant", id: nextId("a"), text: ev.text, streaming: true }] };
+      // a new piece of reasoning or reply: whatever was streaming before it is finished
+      return { ...s, items: [...finishStreaming(s.items), { kind, id: nextId(kind === "assistant" ? "a" : "t"), text: ev.text, streaming: true }] };
     }
+    case "plan_request":
+      return { ...s, plan: { id: ev.id, plan: ev.plan } };
+    case "plan_mode":
+      return s.info ? { ...s, info: { ...s.info, plan: ev.on } } : s;
     case "tool_call": {
       if (s.items.some((i) => i.kind === "tool" && i.id === ev.id)) return s;
       return {
@@ -292,6 +322,7 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
         ...s,
         permission: s.permission?.id === ev.id ? null : s.permission,
         ask: s.ask?.id === ev.id ? null : s.ask,
+        plan: s.plan?.id === ev.id ? null : s.plan,
       };
     case "done": {
       let items: Item[] = finishStreaming(s.items).map((i) => (i.kind === "tool" && i.status === "running" ? { ...i, status: "done" } : i));
@@ -310,7 +341,7 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       }
       else if (ev.stopped) items = [...items, note(`Not finished: ${ev.stopped}`, "unfinished")];
       else if (ev.cut_off) items = [...items, note("Cut off. The reply hit its maximum length.", "cutoff")];
-      return { ...s, items, running: false, info: ev.info, totalCost: ev.info.cost, permission: null, ask: null, denial: null, goalRun: null, goalLive: null };
+      return { ...s, items, running: false, info: ev.info, totalCost: ev.info.cost, permission: null, ask: null, plan: null, denial: null, goalRun: null, goalLive: null };
     }
     case "session_loaded":
       return {
@@ -323,6 +354,7 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
         lastUsage: null,
         permission: null,
         ask: null,
+        plan: null,
         denial: null,
         goalLive: null,
         running: false,
@@ -336,6 +368,8 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
 
 export const SLASH_HELP = [
   "/new — start a new session",
+  "/clear — clear the conversation and start fresh (the old one stays under Sessions)",
+  "/plan [on|off] — plan mode: read-only until you approve a plan (Shift+Tab switches it)",
   "/resume [id] — continue a session (or pick one in the sidebar)",
   "/model NAME — switch model",
   "/permissions ask|judge|allow",
@@ -349,10 +383,14 @@ export const SLASH_HELP = [
 interface Actions {
   apply(ev: ServerEvent): void;
   setSocket(socket: Socket | null): void;
-  submit(text: string): void;
+  /** Send a message (or run a slash command). Returns false when nothing was sent, so the message box keeps its text. */
+  submit(text: string, files?: (Uploaded & { preview?: string })[]): boolean;
   cancel(): void;
   answerPermission(allow: boolean): void;
   answerAsk(answer: string | null): void;
+  answerPlan(approve: boolean, feedback?: string): void;
+  setPlan(on: boolean): void;
+  command(cmd: string, arg: string): void;
   setModel(model: string): void;
   setMode(mode: Mode): void;
   confirmAllowMode(): void;
@@ -395,44 +433,63 @@ export const useStore = create<ChatState & Actions>((set, get) => {
         /* not remembered */
       }
     },
-    submit(raw) {
+    submit(raw, files = []) {
       const text = raw.trim();
-      if (!text) return;
-      if (text.startsWith("/")) {
+      if (!text && !files.length) return false;
+      if (text.startsWith("/") && !files.length) {
         const [cmd, ...rest] = text.split(/\s+/);
         const arg = rest.join(" ");
+        const run = (fn: () => void) => (fn(), true);
         switch (cmd) {
           case "/new":
           case "/clear":
-            return get().newSession();
-          case "/resume":
-            return arg ? get().resume(arg) : notice("Pick a session in the sidebar, or use /resume ID.");
-          case "/model":
-            return arg ? get().setModel(arg) : notice(`Current model: ${get().info?.model}`);
-          case "/permissions":
-            return ["ask", "judge", "allow"].includes(arg) ? get().setMode(arg as Mode) : notice(`Permissions: ${get().info?.permissions}. Use /permissions ask|judge|allow.`);
-          case "/effort":
-            return get().setEffort(arg === "default" || !arg ? null : arg);
-          case "/limit":
-            return /^\d+$/.test(arg) ? get().setLimit(Number(arg)) : notice(`Compaction limit: ${get().info?.limit.toLocaleString()} tokens. Use /limit TOKENS.`);
-          case "/compact":
-            return get().compact(arg || undefined);
-          case "/goal":
-            return set({ showGoal: true });
-          case "/context":
-            return set({ rightTab: "context", rightOpen: true });
-          case "/help":
-            return notice(SLASH_HELP.join("\n"));
+            return run(get().newSession);
+          case "/plan":
+            if (arg && arg !== "on" && arg !== "off") return run(() => notice("Use /plan, /plan on or /plan off."));
+            return run(() => get().setPlan(arg ? arg === "on" : !get().info?.plan));
           default:
-            return set((s) => ({ items: [...s.items, { kind: "error", id: nextId("e"), text: `Unknown command ${cmd}. Try /help.` }] }));
+            return run(() => get().command(cmd, arg));
         }
       }
-      if (get().running) return;
-      if (request({ type: "send", text })) {
-        set((s) => ({ items: [...finishStreaming(s.items), { kind: "user", id: nextId("u"), text }] }));
+      if (get().running) return false;
+      const ids = files.map((f) => f.id);
+      if (request({ type: "send", text, ...(ids.length ? { attachments: ids } : {}) })) {
+        const sent: SentFile[] = files.map((f) => ({ name: f.name, kind: f.kind, ...(f.preview ? { preview: f.preview } : {}) }));
+        set((s) => ({ items: [...finishStreaming(s.items), { kind: "user", id: nextId("u"), text, ...(sent.length ? { attachments: sent } : {}) }] }));
+        return true;
+      }
+      return false;
+    },
+    command(cmd, arg) {
+      switch (cmd) {
+        case "/resume":
+          return arg ? get().resume(arg) : notice("Pick a session in the sidebar, or use /resume ID.");
+        case "/model":
+          return arg ? get().setModel(arg) : notice(`Current model: ${get().info?.model}`);
+        case "/permissions":
+          return ["ask", "judge", "allow"].includes(arg) ? get().setMode(arg as Mode) : notice(`Permissions: ${get().info?.permissions}. Use /permissions ask|judge|allow.`);
+        case "/effort":
+          return get().setEffort(arg === "default" || !arg ? null : arg);
+        case "/limit":
+          return /^\d+$/.test(arg) ? get().setLimit(Number(arg)) : notice(`Compaction limit: ${get().info?.limit.toLocaleString()} tokens. Use /limit TOKENS.`);
+        case "/compact":
+          return get().compact(arg || undefined);
+        case "/goal":
+          return set({ showGoal: true });
+        case "/context":
+          return set({ rightTab: "context", rightOpen: true });
+        case "/help":
+          return notice(SLASH_HELP.join("\n"));
+        default:
+          return set((s) => ({ items: [...s.items, { kind: "error", id: nextId("e"), text: `Unknown command ${cmd}. Try /help.` }] }));
       }
     },
     cancel: () => void request({ type: "cancel" }),
+    answerPlan(approve, feedback) {
+      const p = get().plan;
+      if (p && request({ type: "answer_plan", id: p.id, approve, ...(feedback ? { feedback } : {}) })) set({ plan: null });
+    },
+    setPlan: (on) => void request({ type: "set_plan", on }),
     answerPermission(allow) {
       const p = get().permission;
       if (p && request({ type: "answer_permission", id: p.id, allow })) set({ permission: null, ...(allow ? {} : { denial: "user" as const }) });

@@ -211,6 +211,18 @@ TOOLS = [
         {"task": _str("The complete task, self-contained: every path and fact the helper needs, and the form of answer you want.", minLength=1)},
         ["task"],
     ),
+    _spec(
+        "exit_plan_mode",
+        "Show the user your plan and ask them to approve it. Use it only in plan mode (a note in the conversation says when "
+        "plan mode is on): there, nothing may change until the user approves, so explore with read-only tools first, then call "
+        "this with the plan.\n"
+        "The plan should say what you will change and where (file paths), in what order, and how you will check it works. Keep "
+        "it short enough to read in a minute.\n"
+        "The result says whether the user approved it (plan mode is then off: carry the plan out straight away, in this same "
+        "turn), wants changes (revise the plan and call this again), or cannot answer. Outside plan mode it is refused: just do the work.",
+        {"plan": _str("The plan, in markdown.", minLength=1)},
+        ["plan"],
+    ),
 ]
 SPECS = {t["name"]: t for t in TOOLS}
 READ_ONLY_TOOLS = {"read_file", "glob", "grep"}  # inside the project these run without asking
@@ -563,7 +575,27 @@ def subagent(a, session):
     return session.run_subagent(a["task"])[:SUBAGENT_RESULT_CHARS]
 
 
-IMPLEMENTATIONS = {f.__name__: f for f in (read_file, write_file, edit_file, bash, glob, grep, ask_user, subagent)}
+PLAN_APPROVED = "The user approved the plan. Plan mode is off: carry the plan out now."
+PLAN_CHANGES = "The user wants changes before approving:"
+
+
+def exit_plan_mode(a, session):
+    """Ask the human to approve a plan. session.approve_plan(plan) returns ("approve", None), ("revise", feedback), or None
+    if nobody can answer; it is set by the front end, which also turns plan mode off on approval."""
+    approve = getattr(session, "approve_plan", None)
+    if approve is None or not getattr(session, "plan_mode", lambda: False)():
+        raise ToolError("Plan mode is not on, so there is nothing to approve. Carry on with the work.")
+    answer = approve(a["plan"])
+    if answer is None:
+        return "Nobody can approve plans in this run. Do not change anything: give the plan as your final answer."
+    verdict, feedback = answer
+    if verdict == "approve":
+        return PLAN_APPROVED
+    feedback = (feedback or "").strip() or "(no details given: ask what they would like changed)"
+    return f"{PLAN_CHANGES} {feedback}\nStay in plan mode, revise the plan, and call exit_plan_mode again."
+
+
+IMPLEMENTATIONS = {f.__name__: f for f in (read_file, write_file, edit_file, bash, glob, grep, ask_user, subagent, exit_plan_mode)}
 
 
 # ---------- running ----------
@@ -631,7 +663,10 @@ def describe_call(name, args):
         return f"{name}({safety.visible(args.get('path'))}: replace {safety.visible(str(args.get('old_string', ''))[:50])!r})"
     if name == "write_file":
         return f"{name}({safety.visible(args.get('path'))}, {len(str(args.get('content', '')))} chars)"
-    detail = args.get("command") or args.get("path") or args.get("pattern") or args.get("query") or args.get("question") or args.get("task") or ""
+    if name == "exit_plan_mode":
+        lines = len(str(args.get("plan", "")).strip().split("\n"))
+        return f"{name}(plan, {lines} line{'' if lines == 1 else 's'})"
+    detail =args.get("command") or args.get("path") or args.get("pattern") or args.get("query") or args.get("question") or args.get("task") or ""
     if not detail and args:  # e.g. an MCP tool: show its arguments
         detail = json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)
     return f"{name}({safety.visible(detail, limit=200)})"
@@ -670,4 +705,6 @@ def outcome(name, args, text, is_error):
             answer = " ".join(m.group(1).split())
             return f"answered: {answer[:40]}{'…' if len(answer) > 40 else ''}"
         return "no answer"
+    if name == "exit_plan_mode":
+        return "approved" if text == PLAN_APPROVED else "changes asked" if text.startswith(PLAN_CHANGES) else "not approved"
     return None

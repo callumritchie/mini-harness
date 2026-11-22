@@ -14,6 +14,10 @@ Anthropic's API (Claude) and DeepSeek's Anthropic-compatible endpoint.
 
 - **Tools:** read, write and edit files (edits replace exact text, in a file it has read), run commands, search the project, web search
   (the provider's), ask you a question, and run read-only subagents (several at once).
+- **Plan mode:** `/plan`, `--plan` or Shift+Tab in the web UI. The agent can only read and search; it writes a plan, and nothing changes
+  until you approve it. You can also see the model's reasoning as it works (a summary, on Claude 4.6 and later).
+- **Attachments:** images, PDFs and text or code files go with a message: paste, drop or use the paperclip in the web UI, or `/attach PATH`
+  in the terminal.
 - **Safety first:** harmless things run; anything risky is shown *exactly* and asked yes/no, with hidden characters made visible. Headless it
   denies and tells you how to pre-approve (`--allow "pytest"`). An optional AI judge can take the easy questions (it never sees file
   contents or tool output, and secrets always come to you). Searching is free inside the project and never shows secret files.
@@ -44,16 +48,17 @@ python3 agent.py --ui                  # opens http://127.0.0.1:8765/?token=... 
 python3 agent.py --ui --demo           # try it with a scripted fake model: no key, no cost, throwaway folder
 ```
 
-Chat with streaming markdown, tool calls as cards, the approval dialog, `ask_user` questions with choices, a session list, model / effort /
-permission switches, a live cost and context meter, a file tree and viewer, and a diff of every file the agent writes. Type `/` for commands.
+Chat with streaming markdown and reasoning, tool calls as cards, the approval dialog, `ask_user` questions with choices, plan mode with a
+plan to approve, attachments (paste, drop or the paperclip), a session list, model / effort / permission switches, a live cost and context
+meter, a file tree and viewer, and a diff of every file the agent writes. Type `/` for commands.
 
 The web server can run commands as you, so it listens on `127.0.0.1` only, needs a random per-launch token, checks the `Host` and `Origin`
 headers, never serves secret-looking files, and renders model text without raw HTML or remote images. Details in `DESIGN.md` ("Web UI").
 
 ## Terminal commands
 
-`/new` `/sessions` `/resume [n]` `/model` `/permissions` `/effort` `/context` `/compact` `/limit` `/goal` `/help` `/exit`. Ctrl-C stops the
-current turn, not the program.
+`/new` `/clear` `/sessions` `/resume [n]` `/model` `/permissions` `/plan` `/attach` `/effort` `/context` `/compact` `/limit` `/goal` `/help`
+`/exit`. Ctrl-C stops the current turn, not the program.
 
 ```sh
 python3 agent.py --json -p "say hi"                 # one JSON line: result, tokens, cost

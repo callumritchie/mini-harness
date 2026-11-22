@@ -7,6 +7,7 @@ import itertools
 import json
 import os
 import random
+import re
 import sys
 import threading
 import time
@@ -24,7 +25,7 @@ import pricing
 import safety
 import skills
 import tools
-from permissions import MODES, Permissions
+from permissions import MODES, PLAN_ON_NOTE, Permissions
 from session import Limits, NotFinished, Session, UserError
 
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic")
@@ -159,6 +160,7 @@ class Run:
     model: str
     permissions: Permissions
     on_text: Callable = lambda text: None
+    on_thinking: Callable = lambda text: None  # a piece of the model's (summarised) reasoning, as it streams
     on_tool: Callable = lambda name, args: None
     on_usage: Optional[Callable] = None  # called with (usage dict, cost in dollars or None)
     web_search: bool = True
@@ -185,12 +187,24 @@ def notify(run, kind, data, text):
         run.say(text)
 
 
+def shows_thinking(model):
+    """True for Claude models with adaptive thinking (4.6 and later), which can return a readable summary of their reasoning."""
+    m = re.match(r"claude-(?:[a-z]+-)?(\d+)(?:-(\d+))?", model)
+    if not m:
+        return False
+    major, minor = int(m.group(1)), int(m.group(2) or 0)
+    return major >= 5 or (major == 4 and minor >= 6 and minor < 100)  # a long number after the major version is a date: claude-sonnet-4-20250514
+
+
 def request_body(run):
-    """Anthropic-only request extras: cache the conversation, and the reasoning effort. (The installed SDK has no argument for
-    either, so they go in the request body.) DeepSeek caches on its own and has no effort setting."""
+    """Anthropic-only request extras: cache the conversation, show the model's reasoning (a summary; thinking itself is the same
+    and costs the same either way), and the reasoning effort. (The installed SDK has no argument for these, so they go in the
+    request body.) DeepSeek caches on its own and has neither setting."""
     if run.provider != "anthropic":
         return {}
     body = {"cache_control": {"type": "ephemeral"}}
+    if shows_thinking(run.model):
+        body["thinking"] = {"type": "adaptive", "display": "summarized"}
     if run.effort:
         body["output_config"] = {"effort": run.effort}
     return {"extra_body": body}
@@ -312,9 +326,13 @@ def agent_loop(run, session):
                     model=run.model, max_tokens=MAX_TOKENS[run.provider], system=session.system, tools=tool_defs,
                     messages=session.messages, **extra, **beta,
                 ) as stream:
-                    for text in stream.text_stream:
+                    for event in stream:
                         check_cancel(run)
-                        run.on_text(text)
+                        if event.type == "content_block_delta":
+                            if event.delta.type == "text_delta":
+                                run.on_text(event.delta.text)
+                            elif event.delta.type == "thinking_delta" and event.delta.thinking:
+                                run.on_thinking(event.delta.thinking)
                     reply = stream.get_final_message()
                 break
             except anthropic.APIError as e:  # a reply that broke off is thrown away and asked for again: nothing of it is in the history
@@ -404,13 +422,15 @@ def run_task(run, session, task, human=_UNSET):
     """Run one user task. If anything goes wrong (error, limit or Ctrl-C) the conversation and the read-record are rolled
     back to where the task started (or, if it was compacted meanwhile, to just after the summary), so history never
     holds a tool call without its result. `human` is the text the person typed (default: the task); the permission judge
-    reads only that, so text we generate ourselves (a goal's feedback) passes human=None."""
+    reads only that, so text we generate ourselves (a goal's feedback) passes human=None. `task` is text, or a list of content
+    blocks (attached files, then the typed text); with blocks, pass the typed text as `human`."""
     if run.compactor:
         run.compactor.maybe(session, mid_task=False)  # before the task: the conversation is complete
     session.begin_task()
     content = task
     if session.notes:  # new information goes at the END, after the user's own words
-        content = [{"type": "text", "text": task}] + [{"type": "text", "text": f"[Note: {n}]"} for n in session.notes]
+        blocks = list(task) if isinstance(task, list) else [{"type": "text", "text": task}]
+        content = blocks + [{"type": "text", "text": f"[Note: {n}]"} for n in session.notes]
         session.notes.clear()
     session.add_user(content, human=task if human is _UNSET else human)
     session.cancel, session.on_change = run.cancel, run.on_change
@@ -454,7 +474,7 @@ def run_subagent(run, parent, task, kind="subagent", steps=SUBAGENT_STEPS, tag=N
                         say=lambda m: run.say(f"    {pre}{m.strip()}"))
     sub_run = dataclasses.replace(
         run, permissions=perms, tool_names=list(tools.SUBAGENT_TOOLS), web_search=False, mcp=None, compactor=None,
-        limits=Limits(sub, max_turns=steps, max_cost=budget), on_text=lambda t: None, on_usage=None,
+        limits=Limits(sub, max_turns=steps, max_cost=budget), on_text=lambda t: None, on_thinking=lambda t: None, on_usage=None,
         on_tool=lambda name, args: step(name, args),
         cancel=cancel if cancel is not None else run.cancel,
     )
@@ -616,6 +636,10 @@ def headless(args):
     mcp = start_mcp_and_skills(args)
     permissions = make_permissions(args, interactive=False)
     session.ask_human = lambda question, choices: None  # nobody can answer
+    if getattr(args, "plan", False):  # nobody can approve a plan here, so the run stays read-only and its answer is the plan
+        permissions.plan = True
+        session.plan_mode = lambda: permissions.plan
+        session.notes.append(PLAN_ON_NOTE)
     limits = Limits(session, max_turns=args.max_turns or (GOAL_STEPS if args.goal else MAX_STEPS), max_cost=args.max_cost)
     run = make_run(client, provider, model, args, permissions, mcp, session, on_text=lambda t: None, limits=limits,
                    on_usage=None if args.json else show_usage)
@@ -716,6 +740,7 @@ def build_parser():
     ap.add_argument("--allow", action="append", type=rule, default=[], dest="rules", metavar="RULE",
                     help="pre-approve: 'pytest' (commands starting with it), 'write:PATH', 'read:PATH', 'mcp__server__tool'. Repeatable")
     ap.add_argument("--dangerously-skip-permissions", action="store_true", help="same as --permissions allow")
+    ap.add_argument("--plan", action="store_true", help="start in plan mode: read-only until you approve a plan (with -p: print a plan, change nothing)")
     ap.add_argument("-c", "--continue", dest="cont", action="store_true", help="continue the last session in this folder, rebuilt from its log")
     ap.add_argument("--context-limit", type=positive_int, metavar="TOKENS", help="compact the conversation when a request would reach this many tokens (default 150000)")
     ap.add_argument("--compaction", choices=["auto", "server", "client"], default="auto",
@@ -747,6 +772,8 @@ def main():
             raise UserError("--verify needs --goal. (In chat: /goal --verify \"pytest -q\" what to achieve.)")
         if args.json and not headless_mode:
             raise UserError("--json is for headless runs: use it with -p or --goal.")
+        if args.plan and args.goal is not None:
+            raise UserError("--plan and --goal do not go together: goal mode needs to change files.")
         if args.ui and headless_mode:
             raise UserError("--ui is the interactive web interface; do not combine it with -p or --goal.")
         if args.ui:

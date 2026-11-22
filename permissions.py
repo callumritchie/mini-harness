@@ -20,6 +20,14 @@ MODE_HELP = {
     "judge": "a separate model call decides what it can; secrets, hidden tricks, files that run later and protected files always come to you, and so does anything it is unsure about",
     "allow": "allow everything without asking (including deleting files, secrets and the network)",
 }
+# What may run in plan mode, whatever the permission mode says. bash runs there only when the policy finds it read-only.
+PLAN_TOOLS = {"read_file", "glob", "grep", "ask_user", "subagent", "exit_plan_mode"}
+PLAN_ON_NOTE = ("Plan mode is on. Do not change anything yet: no writing or editing files and no commands that change things "
+                "(those calls are refused). Explore with read-only tools, ask the user if something important is unclear, then call "
+                "exit_plan_mode with a plan for the user to approve.")
+PLAN_OFF_NOTE = "Plan mode is off. You may make changes again (the usual permission rules apply)."
+PLAN_REFUSAL = ("Not run: plan mode is on, so nothing may change yet (only reading, searching and read-only commands run). "
+                "Keep exploring, then call exit_plan_mode with your plan; once the user approves it you can make changes.")
 
 
 def discard_pending_input():
@@ -60,6 +68,7 @@ class Permissions:
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
         self.interactive, self.mode, self.judge_model = interactive, mode, judge_model
+        self.plan = False  # plan mode: read-only until the person approves a plan (on top of whichever mode is set)
         self.policy = safety.Policy(project or os.getcwd(), rules)
         self.say = say or (lambda msg: print(msg, file=sys.stderr))
         self.client = self.model = self.session = None
@@ -80,6 +89,8 @@ class Permissions:
     def decide(self, name, args, call_id=None):
         a = self.policy.assess(name, args)
         a.call_id = call_id  # so the question can say which tool call it is about
+        if self.plan and name not in PLAN_TOOLS and not (name == "bash" and not a.risky):
+            return Decision(False, PLAN_REFUSAL)
         if not a.risky or self.mode == "allow":
             return Decision(True)
         decision = self._decide(a)

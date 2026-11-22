@@ -22,6 +22,9 @@ import itertools
 import time
 from types import SimpleNamespace as NS
 
+import sessionlog
+import tools
+
 _ids = itertools.count(1)
 
 HELLO = """Hello! I'm the **demo model**. I answer from a script, so this costs nothing.
@@ -49,6 +52,19 @@ def _text(t):
     return NS(type="text", text=t)
 
 
+def _think(t):
+    return NS(type="thinking", thinking=t, signature="demo")
+
+
+PLAN = """**Plan: add a greeting module**
+
+1. Create `demo.py` with a `greet(name)` function.
+2. Print a greeting when it runs as a script.
+3. Check it by reading the file back.
+
+Nothing else in the folder changes."""
+
+
 def _tool(name, **args):
     return NS(type="tool_use", id=f"toolu_demo{next(_ids)}", name=name, input=args)
 
@@ -60,8 +76,32 @@ def _last_user_text(messages):
         return None, last["content"]
     content = last["content"]
     if isinstance(content, list):
-        content = next((b["text"] if isinstance(b, dict) else b.text for b in content if (b.get("type") if isinstance(b, dict) else b.type) == "text"), "")
+        content = sessionlog._text_of([b if isinstance(b, dict) else vars(b) for b in content])
     return content, None
+
+
+def _attached(messages):
+    """Names of the files attached to the last message."""
+    content = messages[-1]["content"]
+    if not isinstance(content, list):
+        return []
+    return [b["text"][len(sessionlog.ATTACH_LABEL):-1] for b in content if isinstance(b, dict) and b.get("type") == "text"
+            and sessionlog.is_attach_label(b["text"])]
+
+
+def _plan_on(messages):
+    """Whether the latest note about plan mode (in the person's messages) says it is on."""
+    for m in reversed(messages):
+        if m["role"] == "user" and isinstance(m["content"], list):
+            for b in reversed(m["content"]):
+                text = b.get("text", "") if isinstance(b, dict) else ""
+                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("content") == tools.PLAN_APPROVED:
+                    return False
+                if text.startswith("[Note: Plan mode is on"):
+                    return True
+                if text.startswith("[Note: Plan mode is off"):
+                    return False
+    return False
 
 
 def _last_typed(messages):
@@ -82,9 +122,20 @@ EDIT_NEW = "This is a scratch folder for the `--demo` mode, made fresh each time
 def script(messages):
     """The blocks the demo model replies with, and the stop reason."""
     text, results = _last_user_text(messages)
+    body = 'def greet(name):\n    return f"Hello, {name}!"\n\n\nif __name__ == "__main__":\n    print(greet("demo"))\n'
     if results is not None:  # we just got tool results: wrap up
         first = results[0]
         content = str(first.get("content", ""))
+        if content == tools.PLAN_APPROVED:
+            return [_think("Approved, so I can write the file now."), _text("Plan approved. Carrying it out."),
+                    _tool("write_file", path="demo.py", content=body)], "tool_use"
+        if content.startswith(tools.PLAN_CHANGES):
+            asked = content[len(tools.PLAN_CHANGES):].split("\n")[0].strip()
+            return [_text(f"Understood. You asked for changes:\n\n> {asked}\n\nHere is the plan again (the demo cannot really revise it)."),
+                    _tool("exit_plan_mode", plan=PLAN)], "tool_use"
+        if "plan" in _last_typed(messages).lower() and _plan_on(messages) and not first.get("is_error") and "demo.py" not in content:
+            return [_think("The folder only has a README, so a small new file is enough. I'll propose that."),
+                    _tool("exit_plan_mode", plan=PLAN)], "tool_use"
         if not first.get("is_error") and "Demo folder" in content and "edit" in _last_typed(messages).lower():
             return [_text("Now I'll change that line."), _tool("edit_file", path="README.md", old_string=EDIT_OLD, new_string=EDIT_NEW)], "tool_use"
         if first.get("is_error"):
@@ -96,6 +147,16 @@ def script(messages):
             return [_text(f"You picked **{choice}**. I'd write hello world in {choice} next (the demo stops here).")], "end_turn"
         return [_text("Done. (The result is in the card above.)")], "end_turn"
     t = (text or "").lower()
+    files = _attached(messages)
+    if files:
+        names = ", ".join(f"`{n}`" for n in files)
+        return [_think("The person attached files; the demo can only see their names."),
+                _text(f"I can see you attached {names}. (I'm the scripted demo model, so I can't really read them; a Claude model would.)")], "end_turn"
+    if "plan" in t:
+        if _plan_on(messages):
+            return [_think("Plan mode is on, so I may only look. I'll list the folder first."), _text("I'll look around before proposing anything."),
+                    _tool("glob", pattern="*")], "tool_use"
+        return [_text("Turn on **plan mode** first (the Plan button, Shift+Tab, or `/plan`), then ask me to plan again.")], "end_turn"
     # the review keywords come first: "hidden" contains "hi", "helpers" contains "help"
     if "hidden" in t:
         return [_text("I'll run a command that has an invisible character in it."), _tool("bash", command="echo safe\u202e evil")], "tool_use"
@@ -111,7 +172,6 @@ def script(messages):
     if any(w in t for w in ("delete", "remove", "rm ")):
         return [_text("I'll delete it with a shell command, which needs your approval."), _tool("bash", command="rm demo.py")], "tool_use"
     if any(w in t for w in ("create", "write", "make a file")):
-        body = 'def greet(name):\n    return f"Hello, {name}!"\n\n\nif __name__ == "__main__":\n    print(greet("demo"))\n'
         return [_text("I'll create a small file."), _tool("write_file", path="demo.py", content=body)], "tool_use"
     if any(w in t for w in ("ask", "choose", "pick")):
         return [_tool("ask_user", question="Python or Go?", choices=["Python", "Go"])], "tool_use"
@@ -122,7 +182,7 @@ def script(messages):
     if "long" in t:
         return [_text(LONG)], "end_turn"
     if any(w in t for w in ("hello", "hi", "hey")) or len(t) < 3:
-        return [_text(HELLO)], "end_turn"
+        return [_think("A greeting. I'll say hello and list what the demo can do."), _text(HELLO)], "end_turn"
     return [_text(f"You said: *{text}*\n\n(I'm the scripted demo model, so I only know a few words: try `hello`.)")], "end_turn"
 
 
@@ -140,14 +200,17 @@ class _Stream:
     def __exit__(self, *exc):
         return False
 
-    @property
-    def text_stream(self):
+    def __iter__(self):
+        """The stream's events, as the SDK yields them: text and thinking arrive word by word."""
         for b in self.blocks:
-            if b.type == "text":
-                words = b.text.split(" ")
-                for i, w in enumerate(words):
-                    yield w + (" " if i < len(words) - 1 else "")
-                    time.sleep(self.delay)
+            if b.type not in ("text", "thinking"):
+                continue
+            words = (b.text if b.type == "text" else b.thinking).split(" ")
+            for i, w in enumerate(words):
+                piece = w + (" " if i < len(words) - 1 else "")
+                delta = NS(type="text_delta", text=piece) if b.type == "text" else NS(type="thinking_delta", thinking=piece)
+                yield NS(type="content_block_delta", delta=delta)
+                time.sleep(self.delay)
 
     def get_final_message(self):
         return NS(content=self.blocks, stop_reason=self.stop_reason, usage=self.usage, stop_details=None)

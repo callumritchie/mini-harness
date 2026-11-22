@@ -6,6 +6,7 @@ import { Icon } from "./Icon";
 import { ToolIcon } from "./ToolIcon";
 import { Spinner } from "./Spinner";
 import { DiffRows } from "./DiffView";
+import { Markdown } from "./Markdown";
 
 const LIMIT = 4000;
 const MCP_MARK = "[output from MCP server";
@@ -37,6 +38,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
   const shown = more || result.length <= LIMIT ? result : result.slice(0, LIMIT);
   const mcp = item.mcp || result.startsWith(MCP_MARK);
   const command = item.name === "bash" && typeof item.input.command === "string" ? item.input.command : null;
+  const plan = item.name === "exit_plan_mode" && typeof item.input.plan === "string" ? item.input.plan : null;
   // the result text is written for the model; the row's summary is written for the person
   const nextStep = item.isError && !item.denied ? result.split("\n").find((l) => l.trim()) ?? "" : "";
 
@@ -83,6 +85,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
       {open && (
         <div className="tool-body">
           {command !== null && <pre className="tool-cmd"><span className="muted">$ </span>{command}</pre>}
+          {plan !== null && <div className="tool-plan"><Markdown text={plan} /></div>}
           {rows && !item.isError && (
             <div className="diff tool-diff" aria-label={`What this call changed in ${path}`}>
               <DiffRows rows={rows} wrap headers={false} />

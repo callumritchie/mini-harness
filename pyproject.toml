@@ -19,5 +19,5 @@ dev = ["httpx>=0.27", "fastapi>=0.110", "uvicorn[standard]>=0.29"]
 mini-harness = "agent:main"
 
 [tool.setuptools]
-py-modules = ["agent", "compaction", "context", "controller", "demo", "goal", "judge", "mcp", "permissions", "pricing",
+py-modules = ["agent", "attachments", "compaction", "context", "controller", "demo", "goal", "judge", "mcp", "permissions", "pricing",
               "safety", "session", "sessionlog", "skills", "terminal", "tools", "webserver"]

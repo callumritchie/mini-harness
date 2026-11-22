@@ -43,6 +43,10 @@ const PATHS: Record<string, ReactNode> = {
   cut: <path d="M3 8h7M8 5l3 3-3 3M13 4v8" />,
   copy: <><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" /></>,
   user: <><circle cx="8" cy="5.5" r="2.5" /><path d="M3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4" /></>,
+  plan: <path d="M6.5 4h7M6.5 8h7M6.5 12h7M2.5 4l.8.8 1.4-1.6M2.5 8l.8.8 1.4-1.6M2.7 12h1.6" />,
+  paperclip: <path d="M13 7.5l-5.3 5.3a3 3 0 0 1-4.2-4.2l5.6-5.6a2 2 0 0 1 2.8 2.8L6.4 11.3a1 1 0 0 1-1.4-1.4l4.9-4.9" />,
+  thought: <><path d="M5 11.5a3.5 3.5 0 1 1 1.3-6.7 3 3 0 0 1 5.4 1.5 2.6 2.6 0 0 1-.7 5.2z" /><circle cx="3.5" cy="14" r=".8" /></>,
+  image: <><rect x="2" y="3" width="12" height="10" rx="1.5" /><circle cx="6" cy="6.5" r="1.2" /><path d="M2.5 12l3.5-3.5 2.5 2.5 2-2 3 3" /></>,
 };
 
 export type IconName = keyof typeof PATHS;
@@ -60,7 +64,7 @@ export function Icon({ name, size = 14, className, strokeWidth }: { name: IconNa
 
 const TOOL_ICON: Record<string, IconName> = {
   bash: "terminal", read_file: "file", write_file: "file-plus", edit_file: "edit", glob: "folder", grep: "grep", web_search: "globe",
-  ask_user: "bubble", subagent: "subagent", code_execution: "play",
+  ask_user: "bubble", subagent: "subagent", code_execution: "play", exit_plan_mode: "plan",
 };
 
 /** The icon for a tool call; every MCP tool (and anything unknown) gets the plug. */

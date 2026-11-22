@@ -219,6 +219,78 @@ test("the whole demo walk-through", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("reasoning, attachments, plan mode and /clear", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  // the refused .docx upload is a 400 the browser logs; that one is expected
+  page.on("console", (m) => m.type() === "error" && !m.text().includes("status of 400") && errors.push(m.text()));
+  await page.goto(URL);
+  const box = page.locator("#composer");
+  // the reply has stopped streaming and Send is back (Send alone is also visible before a turn has started)
+  const idle = async () => {
+    await expect(page.locator(".cursor")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
+  };
+  await box.fill("/clear");
+  await box.press("Enter");
+  await expect(page.getByText(/What should we work on/)).toBeVisible();
+
+  // the reasoning streams in its own fold, which closes when the reply starts and opens on a click
+  await box.fill("hello");
+  await box.press("Enter");
+  await expect(page.locator(".markdown pre code")).toContainText("hello from the demo");
+  await idle();
+  const thought = page.locator(".thought").first();
+  await expect(thought.locator("summary")).toContainText("Reasoning");
+  await thought.locator("summary").click();
+  await expect(thought.locator(".thought-text")).toContainText("A greeting.");
+
+  // attach an image and a text file with the paperclip; a .docx is refused in its chip; the sent message shows the files
+  await page.locator('input[type="file"]').setInputFiles([
+    { name: "shot.png", mimeType: "image/png", buffer: Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8cf00000301010018dd8db00000000049454e44ae426082", "hex") },
+    { name: "notes.md", mimeType: "text/markdown", buffer: Buffer.from("# Notes\n") },
+    { name: "report.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: Buffer.from("PK\u0003\u0004") },
+  ]);
+  await expect(page.locator(".pending-files .file-chip.bad")).toContainText("Save it as PDF");
+  await expect(page.locator(".pending-files .file-chip.has-thumb img")).toBeVisible();
+  await expect(page.locator(".pending-files .file-meta").first()).toContainText("B");
+  await page.screenshot({ path: shot("19-attachments") });
+  await box.fill("what are these?");
+  await box.press("Enter");
+  await expect(page.locator(".sent-files .file-chip")).toHaveCount(2);
+  await expect(page.locator(".markdown").last()).toContainText("I can see you attached shot.png, notes.md");
+  await expect(page.locator(".pending-files")).toHaveCount(0);
+  await idle();
+
+  // plan mode: Shift+Tab turns it on; the plan comes as a card; approve, and the work happens with plan mode off
+  await box.press("Shift+Tab");
+  await expect(page.locator(".plan-strip")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Plan/ }).and(page.locator(".plan-toggle"))).toHaveAttribute("aria-pressed", "true");
+  await box.fill("plan a greeting module");
+  await box.press("Enter");
+  const card = page.locator(".plan-card");
+  await expect(card).toContainText("Plan: add a greeting module");
+  await expect(card.getByRole("button", { name: /Approve and start/ })).toBeFocused();
+  await page.screenshot({ path: shot("20-plan") });
+  await card.getByRole("button", { name: /Keep planning/ }).click();
+  await card.getByLabel("What should change in the plan").fill("call it hello.py");
+  await card.getByRole("button", { name: "Send" }).click();
+  await expect(page.locator(".plan-card")).toContainText("Plan: add a greeting module");
+  await page.locator(".plan-card").getByRole("button", { name: /Approve and start/ }).click();
+  await idle();
+  await expect(page.locator(".plan-strip")).toHaveCount(0);
+  await expect(page.locator(".tool-display", { hasText: "write_file(demo.py" }).last()).toBeVisible();
+  await expect(page.locator(".tool-display", { hasText: "exit_plan_mode" }).last()).toBeVisible();
+
+  // /clear: a fresh conversation
+  await box.fill("/cl");
+  await expect(page.getByRole("option", { name: /clear/ })).toBeVisible();
+  await box.fill("/clear");
+  await box.press("Enter");
+  await expect(page.getByText(/What should we work on/)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("a wrong token gets nothing, and the page says what to do", async ({ page, request }) => {
   expect((await request.get("/api/info")).status()).toBe(401);
   expect((await request.get("/api/info", { headers: { Authorization: "Bearer wrong" } })).status()).toBe(401);
