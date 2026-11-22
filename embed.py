@@ -19,6 +19,7 @@ DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
 MODEL_ENV = "MINI_HARNESS_EMBED_MODEL"
 MODEL_SIZE_NOTE = "about 130 MB"
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "  # what the bge models expect in front of a query
+MAX_CHARS = 2000  # about the 512 tokens the model reads; the rest of a passage would only be tokenised and thrown away
 
 
 def model_id():
@@ -60,8 +61,8 @@ class LocalEmbedder:
         self.min_similarity = 0.5  # bge-small puts unrelated English text around 0.3-0.5: below this a "meaning" match is noise
 
     def embed(self, texts, query=False):
-        texts = [QUERY_PREFIX + t for t in texts] if query else list(texts)
-        return [normalise([float(x) for x in v]) for v in self.model.embed(texts, batch_size=64)]
+        texts = [(QUERY_PREFIX + t if query else t)[:MAX_CHARS] for t in texts]
+        return [normalise([float(x) for x in v]) for v in self.model.embed(texts, batch_size=16)]
 
 
 class HashEmbedder:

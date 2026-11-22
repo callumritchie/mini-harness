@@ -7,7 +7,8 @@ pip install -e ".[dev]"          # the agent + web server + test libraries
 python tests/test_loop.py        # the engine, with fake models: no API key, no network
 python tests/test_tools.py       # tool names, manuals, input rules and error messages
 python tests/test_server.py      # the web server, with the scripted demo model
-python tests/test_rag.py         # the document index behind search_docs (chunking, sync, secrets, threads)
+python tests/test_rag.py         # the document index behind search_docs (chunking, sync, secrets, threads, hybrid search)
+python tests/test_graph.py       # the knowledge graph behind explore_graph (extractors, cache, lookups, the paid build)
 
 cd ui
 npm install

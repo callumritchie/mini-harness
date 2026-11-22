@@ -398,12 +398,14 @@ search with them, not with `grep`, `find` or `ls -R` through `bash` (those ask).
   subfolder as `path`, or a `glob` filter.
 - Outside the project, searching asks like any other read.
 
-## Document index (`search_docs`)
+## Document index (`search_docs`, `explore_graph`)
 
-`grep` finds text you can name exactly. `search_docs(query, top_k?, path_prefix?)` finds where a *topic* is covered when the
-model does not know the file or the wording: the project's text files are cut into passages and kept in a full-text index, and a
-search returns the best passages as `path:start-end (score)` with the lines themselves. It is lexical (SQLite FTS5, ranked by
-BM25), standard library only, so it works on every supported Python with no key. `rag.py` holds all of it.
+`grep` finds text you can name exactly. `search_docs(query, top_k?, path_prefix?, mode?)` finds where a *topic* is covered when
+the model does not know the file or the wording: the project's text files are cut into passages and kept in a full-text index
+(SQLite FTS5, ranked by BM25, standard library only), optionally with a vector per passage from a local embedding model, and a
+search returns the best passages as `path:start-end (score)` with the lines themselves. `explore_graph(name, depth?, relation?)`
+answers how things connect, from a knowledge graph over the same passages. `rag.py` holds the index, `embed.py` the embedders,
+`graph.py` the graph; all three share one SQLite file.
 
 - **Where.** `~/.mini-harness/index/<project path with / as ->/rag.sqlite`, next to the session logs and never inside the project.
 - **Schema.** `files(path, mtime_ns, size, sha256, indexed_at)`, `chunks(id, chunk_id, path, start_line, end_line, content,
@@ -427,17 +429,56 @@ BM25), standard library only, so it works on every supported Python with no key.
 - **Threads.** Parallel subagents search at once: each thread has its own connection, writes are serialised by a lock, and WAL
   lets reads continue during a write. A search never waits for a sync, except the very first one on an empty index.
 - **Queries** are reduced to words and quoted (`"frozen" OR "prefix"`), so nothing typed is FTS5 syntax.
-- **Sources for the UI.** The model gets text. The structured passages (`chunk_id, path, start_line, end_line, score,
-  snippet`) go to front ends by a side channel: `search_docs` leaves them in a thread-local that `agent_loop` collects with
-  `tools.take_sources()` right after the call, and passes on as `on_result(..., sources=...)` and in the log's `tool_result`
-  event. `sessionlog.replay` only copies `tool_use_id`, `content` and `is_error`, so they never reach the model; the web UI
-  draws them as ranked rows (a bar relative to the best hit, the passage on request, a link that opens the Files viewer at
-  those lines), live and after a reload.
-- It is read-only and free inside the project like `grep` (a hidden character in the query still asks), and subagents have it.
-  A passage found does not count as reading the file: `edit_file` still needs `read_file` first.
+- **Structured results for the UI.** The model gets text. The structured part (`search_docs`: the passages; `explore_graph`: the
+  neighbourhood) goes to front ends by a side channel: the tool leaves `{"sources": ...}` or `{"graph": ...}` in a thread-local
+  that `agent_loop` collects with `tools.take_meta()` right after the call, and passes on as `on_result(..., meta=...)` and in
+  the log's `tool_result` event. `sessionlog.replay` only copies `tool_use_id`, `content` and `is_error`, so it never reaches the
+  model; the web UI draws it live and after a reload.
+- Both tools are read-only and free inside the project like `grep` (a hidden character in the input still asks), and subagents
+  have them. A passage found does not count as reading the file: `edit_file` still needs `read_file` first.
 
-Next, on the same store: an `embeddings(content_sha, model, vector)` table for hybrid (BM25 + dense) ranking, and
-entity/relationship tables that point at `chunk_id`s for graph lookups.
+### Search by meaning (embeddings)
+
+- **Opt-in, local.** `pip install -e ".[rag]"` adds fastembed (ONNX runtime) and numpy. The model, `BAAI/bge-small-en-v1.5`
+  (384 dimensions, about 130 MB; `MINI_HARNESS_EMBED_MODEL` picks another), is downloaded **only** when the person asks
+  (`/index --embed`, or the Knowledge tab's button) into `~/.mini-harness/models`, and runs on the CPU: no key, no per-call cost,
+  nothing leaves the computer. Without the extra everything works as keyword search, and the tool says so when asked for meaning.
+- **Stored by content and model**: `embeddings(content_sha, model, dim, vector)`, float32 BLOBs. Identical passages share one
+  vector; an unchanged passage is never embedded again (even after a rebuild); a new model never mixes with an old one. Vectors
+  whose passage is gone are purged by the next sync.
+- **When.** After `/index --embed`, the background job (at start and after every task) embeds new and changed passages, a batch
+  at a time with no lock held while the model runs. A search never loads the model; it uses it once the job has.
+- **Search.** The query is embedded (with bge's query prefix), compared to every vector of the project by cosine (numpy; plain
+  Python if numpy is missing), and kept above a noise floor (0.5 for bge-small). Brute force is fine to about 100k passages.
+- **Hybrid** (the default `mode`): the keyword list and the meaning list are fused by reciprocal rank (each list adds
+  `1 / (60 + rank)`), so neither score has to be calibrated against the other. The fused score is shown 0-1 (1: first in every
+  list used); each hit says which lists found it (`keyword`, `meaning`, `both`) and carries its raw BM25 and cosine. `keyword`
+  and `meaning` use one list. The ranked ids and the rows they name are read in one SQLite snapshot, so a re-index running at
+  the same moment cannot make a hit vanish.
+
+### Knowledge graph
+
+- **Tables** (same file): `entities(key, name, kind)` with an FTS5 table over names; `mentions(entity, chunk_id, extractor)`;
+  `edges(src, dst, relation, chunk_id, extractor)`; `extractions(content_sha, extractor, payload)`, the cache; `graph_chunks`,
+  which passages each extractor has been applied to. Deleting a chunk drops its mentions and edges (a trigger); entities nothing
+  refers to are purged. Every link cites the passage it came from.
+- **structure-v1** (free, deterministic, part of every index update): Python by `ast` (modules, classes, functions; `defines`,
+  `imports`, `inherits`, and `calls` where the callee is defined in the file, imported, or a method called through `self`),
+  Markdown (documents and sections, `contains`, `links_to` for relative links to files that exist, `mentions` for a
+  `backticked` name that matches a code entity). Cached by the whole file's sha256, so a rebuild re-parses nothing; facts sit on
+  the passage holding their line. Calls through variables, dynamic imports and other languages are not covered: a missing link
+  is not proof of none.
+- **llm-v1** (opt-in, costs money): `/graph build` (or the Knowledge tab) first shows an estimate (passages, tokens, cost; nothing
+  sent), then a model (claude-haiku-5-5 by default) reads each new prose passage once and names its concepts and relations. The
+  passage is sent in its own tag, the system prompt says it is data, and the answer is parsed strictly (anything malformed is
+  dropped; an unusable answer is cached as empty so it is not paid for twice). Every call is a session `aux` cost, so it shows in
+  the meter and the log and stops at `--max-cost`; Stop ends it. Cached by passage content and kept even when the file goes
+  away, so switching branches does not pay twice. Links it found are marked as a model's reading.
+- **Lookup**: a name matches exactly (any case), then as the end of a dotted name (`Store` finds `pkg.app.Store`), then by words;
+  close matches are listed. Links are followed both ways, up to 3 hops and 40 things.
+- **In the UI**: the tool card and the Knowledge tab draw the neighbourhood as a small radial SVG (no graph library: the page's
+  CSP and size) and list links by relation, each opening its passage. The Knowledge tab also shows the index's counts and
+  progress, turns on search by meaning, and runs the prose build behind its estimate.
 
 ## Asking the user
 

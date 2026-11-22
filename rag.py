@@ -29,7 +29,7 @@ MAX_SNIPPET_CHARS = 4000  # of a chunk, in the structured sources a front end ge
 MAX_TERMS = 32
 RESYNC_SECONDS = 2.0  # a search re-checks the files at most this often (parallel helpers searching at once share one check)
 BATCH = 200  # files per write transaction
-EMBED_BATCH = 64  # passages embedded per step (the write lock is free between steps)
+EMBED_BATCH = 16  # passages embedded per step (short steps: progress moves, and nothing waits long behind one)
 RRF_K = 60  # reciprocal rank fusion: a hit's share from one list is 1 / (RRF_K + its rank there)
 MODES = ("hybrid", "keyword", "meaning")
 

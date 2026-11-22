@@ -14,9 +14,12 @@ Anthropic's API (Claude) and DeepSeek's Anthropic-compatible endpoint.
 
 - **Tools:** read, write and edit files (edits replace exact text, in a file it has read), run commands, search the project, web search
   (the provider's), ask you a question, and run read-only subagents (several at once).
-- **Document search:** `search_docs` finds the passages about a topic across docs and code, with `path:lines` citations, from a local
-  full-text index (SQLite, no extra installs) kept outside the project and updated as files change; secret files are never indexed.
-  In the web UI the passages are ranked rows that open at those lines. `/index` updates it now, `/index --rebuild` starts over.
+- **Document search and a knowledge graph:** `search_docs` finds the passages about a topic across docs and code, with `path:lines`
+  citations, from a local full-text index (SQLite, no extra installs) kept outside the project and updated as files change; secret
+  files are never indexed. `explore_graph` shows how things connect (defines, imports, calls, mentions...), each link citing its
+  passage. Optional: search by meaning with a local model (`pip install -e ".[rag]"`, then `/index --embed`; nothing leaves your
+  computer), and `/graph build` to have a model read the prose for concepts (it shows the cost first). In the web UI passages and
+  graphs open at their lines, and the Knowledge tab shows and builds it all. `--no-index` turns the background indexing off.
 - **Safety first:** harmless things run; anything risky is shown *exactly* and asked yes/no, with hidden characters made visible. Headless it
   denies and tells you how to pre-approve (`--allow "pytest"`). An optional AI judge can take the easy questions (it never sees file
   contents or tool output, and secrets always come to you). Searching is free inside the project and never shows secret files.
@@ -55,7 +58,7 @@ headers, never serves secret-looking files, and renders model text without raw H
 
 ## Terminal commands
 
-`/new` `/sessions` `/resume [n]` `/model` `/permissions` `/effort` `/context` `/compact` `/limit` `/index` `/goal` `/help` `/exit`. Ctrl-C stops the
+`/new` `/sessions` `/resume [n]` `/model` `/permissions` `/effort` `/context` `/compact` `/limit` `/index` `/graph` `/goal` `/help` `/exit`. Ctrl-C stops the
 current turn, not the program.
 
 ```sh
@@ -76,7 +79,7 @@ servers unless you name them with `--pass-env NAME`.
 
 ```sh
 pip install -e ".[dev]"
-python tests/test_loop.py && python tests/test_tools.py && python tests/test_server.py && python tests/test_rag.py   # no API key needed
+python tests/test_loop.py && python tests/test_tools.py && python tests/test_server.py && python tests/test_rag.py && python tests/test_graph.py   # no API key needed
 cd ui && npm test && npm run e2e                              # unit tests, then a real browser against the demo model
 ```
 
