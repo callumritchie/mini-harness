@@ -433,17 +433,31 @@ answers how things connect, from a knowledge graph over the same passages. `rag.
   `__tests__/`, `e2e/`, `test_*.py`, `*_test.go`, `*.test.ts`, `*.spec.tsx`, `conftest.py`, ...) counts 0.6 unless the query is
   about tests (`test`, `spec`, `fixture`, `e2e`) or the folder searched is a test folder, so sample strings in tests do not crowd
   out the docs; hits say `is_test`, and a test that is the only match is still returned.
+- **What to search is the person's choice** (2026-11-24). The terminal and the web UI index nothing until the person answers,
+  once per folder, "Let the agent search this folder?": everything, chosen folders (with single files unticked inside a ticked
+  folder), or not now. The choice is saved in the index's `meta` (`selection`: `off`, `excluded`, `included`, `gitignore`) and
+  changed later from the Files tab; `Index.plan()` says what each answer would take (files, size, estimated chunks, by top-level
+  folder) from names and sizes alone. An empty folder needs no answer. Until there is one, or after "not now", `search_docs` and
+  `explore_graph` tell the model to use grep instead. The library and headless runs keep `rag.AUTO = True`: they index on first
+  use, as before.
+- **`.gitignore` counts** by default (`ignore.py`: every `.gitignore` in the project, each for its own folder; patterns, `!`,
+  folder-only, anchored, `**`). A folder left out by it, by the choice, or as build output is not walked and is recorded once as
+  `folder/` with its reason (`gitignored`, `not_chosen`, `ignored_folder`); the Files tab marks everything under it.
 - **Incremental.** A sync walks the files the way `grep` does; a file with the same `(mtime_ns, size)` is skipped, one with a
   new stamp but the same sha256 only gets its stamp refreshed, a changed one is cut again, and a deleted one is purged. It runs in
   the background when a front end starts, after every write the agent makes (the `on_change` hook; skipped if a sync is
   already running), before a search (at most every 2 seconds, so changes made by `bash` are seen too), and on `/index`
-  (`--rebuild` builds it from nothing). Headless runs build it on the first search.
+  (`--rebuild` builds it from nothing). Headless runs build it on the first search. Each update that changed something is kept in
+  a short in-memory list with what started it (`start`, `after task`, `agent wrote`, `before search`, `first choice`, ...), which
+  the Knowledge tab shows. Map and vectors only catch up at start and after a task, so a file written mid-task is found by
+  keyword at once and by meaning and on the map when the task ends.
 - **Never indexed:** secret-looking files (`safety.is_secret`, on the path and on where a symlink leads), `.git`, `node_modules`,
   virtualenvs, caches and `dist`/`build`, symlinks leading out of the project, binary and non-UTF-8 files, files over 2 MB,
   minified files (average line over 500 characters), and more than 20,000 files.
 - **Threads.** Parallel subagents search at once: each thread has its own connection, writes are serialised by a lock, and WAL
   lets reads continue during a write. A search never waits for a sync, except the very first one on an empty index.
-- **Queries** are reduced to words and quoted (`"frozen" OR "prefix"`), so nothing typed is FTS5 syntax.
+- **Queries** are reduced to words and quoted (`"frozen" OR "prefix"`), so nothing typed is FTS5 syntax. Words are stemmed
+  (FTS5 `porter` tokenizer, schema 4), so `skip` finds `skipped` and `index` finds `indexing`.
 - **Structured results for the UI.** The model gets text. The structured part (`search_docs`: the passages; `explore_graph`: the
   neighbourhood) goes to front ends by a side channel: the tool leaves `{"sources": ...}` or `{"graph": ...}` in a thread-local
   that `agent_loop` collects with `tools.take_meta()` right after the call, and passes on as `on_result(..., meta=...)` and in
@@ -454,20 +468,25 @@ answers how things connect, from a knowledge graph over the same passages. `rag.
 
 ### Search by meaning (embeddings)
 
-- **Opt-in, local.** `pip install -e ".[rag]"` adds fastembed (ONNX runtime) and numpy. The model, `BAAI/bge-small-en-v1.5`
-  (384 dimensions, about 130 MB; `MINI_HARNESS_EMBED_MODEL` picks another), is downloaded **only** when the person asks
-  (`/index --embed`, or the Knowledge tab's button) into `~/.mini-harness/models`, and runs on the CPU: no key, no per-call cost,
-  nothing leaves the computer. Without the extra everything works as keyword search, and the tool says so when asked for meaning.
+- **Always on, local** (2026-11-24; it was opt-in). fastembed (ONNX runtime) and numpy are part of the base install. The model,
+  `BAAI/bge-small-en-v1.5` (384 dimensions, about 130 MB; `MINI_HARNESS_EMBED_MODEL` picks another), downloads in the background
+  the first time an interactive front end starts on a chosen folder, into `~/.mini-harness/models`, and runs on the CPU: no key,
+  no per-call cost, nothing leaves the computer. Until it is there (or offline, or the demo), searches use keywords alone and the
+  tool says so. `MINI_HARNESS_EMBED_DOWNLOAD=0` stops the download (the tests and CI set it).
 - **Stored by content and model**: `embeddings(content_sha, model, dim, vector)`, float32 BLOBs. Identical passages share one
   vector; an unchanged passage is never embedded again (even after a rebuild); a new model never mixes with an old one. Vectors
   whose passage is gone are purged by the next sync.
-- **When.** After `/index --embed`, the background job (at start and after every task) embeds new and changed passages, a batch
+- **When.** The background job (at start and after every task) embeds new and changed passages, a batch
   at a time with no lock held while the model runs. A search never loads the model; it uses it once the job has.
 - **Search.** The query is embedded (with bge's query prefix), compared to every vector of the project by cosine (numpy; plain
   Python if numpy is missing), and kept above a noise floor (0.5 for bge-small). Brute force is fine to about 100k passages.
-- **Hybrid** (the default `mode`): the keyword list and the meaning list are fused by reciprocal rank (each list adds
-  `1 / (60 + rank)`), so neither score has to be calibrated against the other. The fused score is shown 0-1 (1: first in every
-  list used); each hit says which lists found it (`keyword`, `meaning`, `both`) and carries its raw BM25 and cosine. `keyword`
+- **Hybrid** (the default `mode`): each way lists its best `4 x top_k`; then every listed passage is scored **both** ways (BM25
+  for meaning's picks, cosine for keyword's), each score is scaled 0-1 within the search (BM25 / the best; cosine above the noise
+  floor / the best) and the two are averaged (`KEYWORD_WEIGHT` 0.5). This replaced reciprocal-rank fusion (2026-11-24): with
+  RRF a passage both short lists happened to include always beat one that a single way ranked first, and on this repo that
+  dropped the code that answered the question for a type definition. Each hit says which ways found it at all (`keyword`: it has
+  the words; `meaning`: above the floor; `both`), carries its raw BM25 and cosine, its place in each list (`keyword_rank`,
+  `meaning_rank`) and its file's length (`file_lines`). The trace (front ends only) adds both lists as `candidates`. `keyword`
   and `meaning` use one list. The ranked ids and the rows they name are read in one SQLite snapshot, so a re-index running at
   the same moment cannot make a hit vanish.
 
@@ -491,9 +510,29 @@ answers how things connect, from a knowledge graph over the same passages. `rag.
   away, so switching branches does not pay twice. Links it found are marked as a model's reading.
 - **Lookup**: a name matches exactly (any case), then as the end of a dotted name (`Store` finds `pkg.app.Store`), then by words;
   close matches are listed. Links are followed both ways, up to 3 hops and 40 things.
-- **In the UI**: the tool card and the Knowledge tab draw the neighbourhood as a small radial SVG (no graph library: the page's
-  CSP and size) and list links by relation, each opening its passage. The Knowledge tab also shows the index's counts and
-  progress, turns on search by meaning, and runs the prose build behind its estimate.
+- **In the UI**: the neighbourhood is listed (what uses it, what it uses, by relation; names further away by distance), each
+  link opening its chunk. See "Showing search" below.
+
+### Showing search (web UI, 2026-11-24)
+
+Everything is in three levels, so nothing is dense until asked for: a glance that is always there, one click for what was
+retrieved and where it sits, and a "why" for when a result looks wrong. One word for one thing: **chunk** (never snippet or
+passage in the UI), **search by keyword / by meaning**, **the map**, **names** and **links**.
+
+- **A search in chat.** The row: "Searched your files for “…” · 4 chunks". Open: each chunk with its file name and lines first,
+  either *Where* (a bar the length of the file with the chunk drawn where it sits: "110 of 355 lines") or *How found* (its place in
+  each ranking, or "not in keyword's top 20" / "no keyword match"). *Why these?*: both rankings side by side, the kept ones
+  numbered as above. The same card is used in the Knowledge tab and for your own search.
+- **A whole turn.** Under the reply: "Read 6 chunks from 3 files · 1 map lookup" ("read", never "based on": the model does not
+  say which it used). Open: one bar per file with every chunk of the turn on it, each saying which lookup found it.
+- **A file.** The Files viewer's gutter has two thin stripes, alternate chunks on each, so the shared lines show where both run.
+  Click one (or "N chunks" above the code) for that chunk: lines, what it shares, whether meaning can find it, the names on the
+  map in it, with previous / next.
+- **The index.** The Knowledge tab opens with one status line, then four lanes (Files → Chunks → Vectors → Map) with live state,
+  the last updates by what started them, and *Details* (what's left out and why, change what's searched, search by meaning,
+  concepts, where the index lives).
+- **First open.** A card above the chat (and one prompt in the terminal) asks what the agent may search; *Choose folders…*
+  opens Files with a box on every folder and file, `.gitignore` folders unticked and labelled.
 
 ## Asking the user
 
@@ -680,9 +719,12 @@ permission question is dropped (denied) too.
 **Protocol** (WebSocket `/ws`, JSON; REST under `/api`). Server to browser: `hello`, `info`, `status`, `text_delta`, `tool_call`,
 `tool_result`, `usage` (tokens, call cost, session total with completeness), `notice`, `file_change` (path, before, after),
 `permission_request` (title, the exact action lines with hidden characters already visible, findings, reasons, judge note), `ask_user`,
-`question_closed`, `done`, `session_loaded`, `error`. Browser to server: `send`, `cancel`, `answer_permission`, `answer_ask`, `set_model`,
-`set_permissions`, `set_effort`, `set_limit`, `new_session`, `resume`, `compact`, `goal`. REST: `GET /api/info`, `/sessions`,
-`/session/{id}` (the conversation redrawn from the log), `/files`, `/file?path=`, `/changes`, `/context`. Unanswered questions are re-sent
+`question_closed`, `done`, `session_loaded`, `error`, `index_status` (while the page watches the index). Browser to server: `send`, `cancel`,
+`answer_permission`, `answer_ask`, `set_model`, `set_permissions`, `set_effort`, `set_limit`, `new_session`, `resume`, `compact`, `goal`,
+`index`, `watch_index`, `choose_search` (`off`, `excluded`, `included`), `graph_estimate`, `graph_build`. REST: `GET /api/info`, `/sessions`,
+`/session/{id}` (the conversation redrawn from the log), `/files` (with each file's index state, and `gi` for what .gitignore leaves out),
+`/file?path=`, `/changes`, `/context`, `/index`, `/index/plan` (what searching would take), `/index/file?path=`, `/index/chunks?path=` (how a
+file is cut), `/search`, `/graph`, `/graph/names` (the last three answer 409 until the person has chosen to search). Unanswered questions are re-sent
 when a page reconnects; a page loaded mid-run redraws the finished messages from `/api/session/{id}`.
 
 **Security** (the server can run commands as you, so this is not optional):

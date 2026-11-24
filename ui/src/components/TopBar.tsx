@@ -1,5 +1,7 @@
+import { activity } from "../lib/knowledgeWords";
 import { useStore } from "../store";
 import { Icon } from "./Icon";
+import { Spinner } from "./Spinner";
 import { PermissionMenu } from "./PermissionMenu";
 import { SettingsMenu } from "./SettingsMenu";
 
@@ -12,6 +14,7 @@ export function TopBar() {
     return row ? (row.prompts === 0 ? "New session" : row.title.replace(/^GOAL:\s*/, "")) : undefined;
   });
   const s = useStore();
+  const indexing = activity(s.indexStatus); // shown only while the index, its vectors or the map are being updated
   if (!info) return <header className="topbar"><span className="muted">Connecting…</span></header>;
 
   const context = last ? last.input + last.cache_read + last.cache_write : 0;
@@ -29,6 +32,11 @@ export function TopBar() {
         </div>
         {demo && <span className="badge demo">DEMO</span>}
         <div className="spacer" />
+        {indexing && (
+          <button className="index-activity" onClick={() => s.patch({ rightOpen: true, rightTab: "knowledge" })} title={`${indexing}: open Knowledge`}>
+            <Spinner size={12} /><span className="ia-text">{indexing}</span>
+          </button>
+        )}
 
         <SettingsMenu context={context} pct={pct} />
         <PermissionMenu />

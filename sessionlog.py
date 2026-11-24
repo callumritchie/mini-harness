@@ -187,7 +187,7 @@ def replay(events):
     return s
 
 
-META_KEYS = ("sources", "graph")  # = tools.META_KEYS (this module stays free of the tools)
+META_KEYS = ("sources", "graph", "search")  # = tools.META_KEYS (this module stays free of the tools)
 
 
 def tool_meta(events):

@@ -2,6 +2,7 @@
 the code), that the strict input rules hold for every tool, and that every failure tells the model what to do next.
 Offline, no API key: python3 tests/test_tools.py   (or: python3 -m pytest tests/test_tools.py)"""
 import os
+os.environ.setdefault("MINI_HARNESS_EMBED_DOWNLOAD", "0")  # tests never download the embedding model
 import re
 import sys
 import tempfile
@@ -325,11 +326,11 @@ def test_outcome_says_how_a_call_went_from_our_own_result_text():
     assert o("grep", {}, "a.py:1:x\nb.py:2:x\n[Search stopped after 200 matches: this is only part of the results.]", False) == "2+ matches"
     assert o("ask_user", {}, "The user answered: Go", False) == "answered: Go"
     assert o("edit_file", {}, "Edited", False) is None and o("read_file", {}, "nope", True) is None
-    assert o("search_docs", {}, "5 passages for 'x' (index: 9 files, ranked by keyword match):", False) == "5 passages"
-    assert o("search_docs", {}, "1 passage for 'x' (index", False) == "1 passage"
+    assert o("search_docs", {}, "5 passages for 'x' (index: 9 files, ranked by keyword match):", False) == "5 chunks"
+    assert o("search_docs", {}, "1 passage for 'x' (index", False) == "1 chunk"
     assert o("search_docs", {}, "No passages match 'x' in the index", False) == "no matches"
-    assert o("explore_graph", {}, "pkg.Store (class): 12 links:\n  x", False) == "12 links"
-    assert o("explore_graph", {}, "a (module): 1 link within 2 hops:", False) == "1 link"
+    assert o("explore_graph", {}, "pkg.Store (class): 12 links:\n  x", False) == "12 connections"
+    assert o("explore_graph", {}, "a (module): 1 link within 2 hops:", False) == "1 connection"
     assert o("explore_graph", {}, "Nothing in the graph matches 'x'", False) == "no match"
 
 

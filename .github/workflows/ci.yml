@@ -8,6 +8,8 @@ on:
 jobs:
   python:
     runs-on: ubuntu-latest
+    env:
+      MINI_HARNESS_EMBED_DOWNLOAD: "0"  # search by meaning's model is never downloaded in CI
     strategy:
       fail-fast: false
       matrix:

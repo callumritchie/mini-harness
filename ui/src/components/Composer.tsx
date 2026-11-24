@@ -206,7 +206,7 @@ export function Composer() {
           autoFocus
         />
         <div className="cfoot">
-          <button className="btn-icon attach" onClick={() => picker.current?.click()} title="Attach images, PDFs or text files (or paste, or drop them here)" aria-label="Attach files">
+          <button className="btn-icon attach" onClick={() => picker.current?.click()} title="Attach images, PDFs or text files (or paste, or drop them here). They go with this message only: they are not added to the project or its search." aria-label="Attach files">
             <Icon name="paperclip" size={16} />
           </button>
           <input ref={picker} type="file" multiple accept={ACCEPT} hidden onChange={(e) => { if (e.target.files) add(e.target.files); e.target.value = ""; }} />

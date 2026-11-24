@@ -435,7 +435,7 @@ def build_llm(index, client, model=LLM_MODEL, prose_only=True, on_cost=None, can
                 if on_cost is not None:
                     on_cost(usage, pricing.cost(model, usage))  # may raise: the spending limit
                 if n % 10 == 0:
-                    say(f"graph: {n} of {len(todo)} passages read")
+                    say(f"Concepts: {n} of {len(todo)} chunks read")
             else:
                 payload = json.loads(c.execute("SELECT payload FROM extractions WHERE content_sha = ? AND extractor = ?", (sha, LLM)).fetchone()[0])
             with index.write_lock:
@@ -478,14 +478,19 @@ def _node(row, hop=0):
     return {"id": row[0], "name": row[1], "kind": row[2], "hop": hop}
 
 
+def _like(text):
+    """Text for a LIKE pattern (with ESCAPE '\\'), so % and _ typed by someone are plain characters."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def find(index, name, limit=5):
     """Entities that best match a name: exact (any case), then a qualified name ending in it, then by words. Best first."""
     c = index.conn()
     q = " ".join(name.split())
     exact = c.execute("SELECT id, name, kind FROM entities WHERE lower(name) = lower(?) ORDER BY kind = 'symbol', length(name) LIMIT ?",
                       (q, limit)).fetchall()
-    ends = c.execute("SELECT id, name, kind FROM entities WHERE lower(name) LIKE '%.' || lower(?) ORDER BY kind = 'symbol', length(name) "
-                     "LIMIT ?", (q, limit)).fetchall()
+    ends = c.execute("SELECT id, name, kind FROM entities WHERE lower(name) LIKE '%.' || lower(?) ESCAPE '\\' "
+                     "ORDER BY kind = 'symbol', length(name) LIMIT ?", (_like(q), limit)).fetchall()
     # the case as typed wins: `Controller` is the class controller.Controller before the module controller
     rows = [r for r in exact if r[1] == q] + [r for r in ends if r[1].endswith("." + q)] + exact + ends
     terms = rag.query_terms(q)
@@ -499,6 +504,32 @@ def find(index, name, limit=5):
             seen.add(r[0])
             out.append(r)
     return out[:limit]
+
+
+def suggest(index, typed, limit=8):
+    """Names to offer while someone types a lookup: what find() would pick first, then names containing the typed text (so a
+    half-typed `check_can` already offers agent.check_cancel). [{name, kind}], best first."""
+    rows = find(index, typed, limit)
+    q = _like(" ".join(typed.split()).lower())
+    if q:
+        rows += index.conn().execute("SELECT id, name, kind FROM entities WHERE lower(name) LIKE ? ESCAPE '\\' "
+                                     "ORDER BY kind = 'symbol', length(name) LIMIT ?", (f"%{q}%", limit)).fetchall()
+    seen, out = set(), []
+    for r in rows:
+        if r[0] not in seen:
+            seen.add(r[0])
+            out.append({"name": r[1], "kind": r[2]})
+    return out[:limit]
+
+
+def file_entity(index, rel):
+    """The name a file goes by on the map (a Python module, a Markdown document), or None if the map has nothing for it."""
+    suffix = Path(rel).suffix.lower()
+    key = module_name(rel).lower() if suffix == ".py" else f"file:{rel}".lower() if suffix in (".md", ".mdx", ".markdown") else None
+    if key is None:
+        return None
+    row = index.conn().execute("SELECT name FROM entities WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
 
 
 def explore(index, name, depth=1, relation=None, limit=MAX_NODES):
@@ -543,6 +574,12 @@ def explore(index, name, depth=1, relation=None, limit=MAX_NODES):
         frontier = nxt
     mentioned = c.execute("SELECT DISTINCT ch.path, ch.start_line, ch.end_line, ch.chunk_id FROM mentions m JOIN chunks ch ON ch.chunk_id = m.chunk_id "
                           "WHERE m.entity_id = ? ORDER BY ch.path, ch.start_line LIMIT 10", (center[0],)).fetchall()
+    typed = " ".join(name.split()).lower()
+    matched = "exact" if center[1].lower() == typed else "ends" if center[1].lower().endswith("." + typed) else "words"
+    by_hop = {}
+    for n in nodes.values():
+        by_hop[n["hop"]] = by_hop.get(n["hop"], 0) + 1
     return {"center": nodes[center[0]], "alternatives": [_node(r) for r in found[1:]], "nodes": list(nodes.values()), "edges": edges,
             "mentioned_in": [{"path": p, "start_line": s, "end_line": e, "chunk_id": cid} for p, s, e, cid in mentioned],
-            "truncated": truncated}
+            "truncated": truncated, "matched": matched, "depth": min(depth, MAX_DEPTH), "relation": relation,
+            "by_hop": [by_hop.get(h, 0) for h in range(1, min(depth, MAX_DEPTH) + 1)]}

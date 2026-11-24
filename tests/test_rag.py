@@ -228,6 +228,41 @@ def test_secrets_ignored_folders_and_binaries_are_never_indexed():
     assert paths(index) == ["ok.py"]
 
 
+def test_coverage_says_why_each_file_was_left_out():
+    root, index = project({
+        "ok.py": "def f():\n    return g()\n\ndef g():\n    return 1\n", "README.md": "# Hi\n", ".env": "API_KEY=sk-secret\n",
+        "dist/app.js": "x\n", "bin.dat": b"x\x00\x01", "min.js": "x" * 5000 + "\n", "latin.txt": "caf\xe9\n".encode("latin-1"),
+        "big.txt": "y" * (rag.MAX_FILE_BYTES + 10), "ui/app.ts": "export const a = 1\n", "empty.json": "",
+    })
+    outside = Path(tempfile.mkdtemp()) / "outside.txt"
+    outside.write_text("outside\n")
+    os.symlink(outside, root / "outside-link.txt")
+    index.sync()
+    cov = index.coverage()
+    assert cov["skipped"] == {".env": "secret", "dist/": "ignored_folder", "bin.dat": "binary", "min.js": "minified",
+                              "latin.txt": "not_utf8", "big.txt": "too_large", "outside-link.txt": "outside"}, cov["skipped"]
+    assert set(cov["files"]) == {"ok.py", "README.md", "ui/app.ts", "empty.json"} and cov["files"]["ok.py"][0] == 1 and not cov["capped"]
+    assert cov["files"]["empty.json"] == [0, 0]  # indexed, nothing to find in it
+    assert set(rag.SKIP_REASONS) >= set(cov["skipped"].values())
+    status = index.status()
+    assert status["skipped"]["secret"] == 1 and sorted(status["not_mapped"]) == [(".json", 1), (".ts", 1)] and status["not_mapped_files"] == 2
+    # a fixed file leaves the list, by the write hook as well as by a sync
+    (root / "min.js").write_text("short\n")
+    index.update_paths(["min.js"])
+    assert "min.js" not in index.coverage()["skipped"] and "min.js" in index.coverage()["files"]
+    (root / "ok.py").write_bytes(b"x\x00")
+    index.update_paths(["ok.py"])
+    assert index.coverage()["skipped"]["ok.py"] == "binary"
+
+
+def test_last_sync_survives_a_restart():
+    root, index = project({"a.py": "x\n"})
+    assert index.status()["last_sync"] is None
+    index.sync()
+    again = rag.Index(root)  # a new process: nothing in memory
+    assert again.last_sync is None and abs(again.status()["last_sync"] - time.time()) < 60
+
+
 def test_the_index_lives_outside_the_project():
     root, index = project({"a.py": "x\n"})
     index.sync()
@@ -248,7 +283,7 @@ def test_the_relevant_file_ranks_first():
     assert hits[0]["path"] == "docs/cache.md" and hits[0]["start_line"] == 1 and hits[0]["end_line"] == 2
     assert [h["score"] for h in hits] == sorted((h["score"] for h in hits), reverse=True) and all(h["score"] >= 0 for h in hits)
     assert set(hits[0]) == {"chunk_id", "chunk_ids", "path", "start_line", "end_line", "heading", "score", "match", "bm25", "cosine",
-                            "is_test", "snippet"} and len(hits[0]["chunk_id"]) == 16
+                            "is_test", "snippet", "keyword_rank", "meaning_rank", "file_lines"} and len(hits[0]["chunk_id"]) == 16
     assert hits[0]["heading"] == "Prompt cache" and hits[0]["is_test"] is False and hits[0]["chunk_ids"] == [hits[0]["chunk_id"]]
     assert hits[0]["score"] == 1.0 and hits[0]["match"] == "keyword" and hits[0]["cosine"] is None and hits[0]["bm25"] > 0
     assert len(index.search("frozen prefix cache", top_k=1)) == 1
@@ -353,7 +388,9 @@ def test_tests_rank_below_docs_unless_the_search_is_about_tests():
     assert {h["path"] for h in about} == {"docs/retry.md", "tests/test_retry.py", "src/retry_test.go"}
     weighted = {h["path"]: h["score"] for h in index.search("retry budget")}
     plain = {h["path"]: h["score"] for h in about}
-    assert plain["tests/test_retry.py"] > weighted["tests/test_retry.py"] and plain["docs/retry.md"] >= weighted["docs/retry.md"] * 0.9
+    # scores are relative to the best result of each search: weighted, the test files sit below the doc; asked about tests,
+    # they are not held back (their path has the word, so they now lead)
+    assert weighted["tests/test_retry.py"] < weighted["docs/retry.md"] and plain["tests/test_retry.py"] >= plain["docs/retry.md"]
     assert [h["path"] for h in index.search("retry budget", path_prefix="tests")] == ["tests/test_retry.py"]
     root, index = project({"tests/only.py": "unique_marker_word\n", "README.md": "nothing\n"})
     assert [h["path"] for h in index.search("unique_marker_word")] == ["tests/only.py"]  # still found when it is all there is
@@ -452,6 +489,20 @@ def test_embedding_can_be_stopped_and_only_one_job_runs():
     assert index.embed_pending(embed.HashEmbedder(), batch=3)["embedded"] == 10
 
 
+def test_a_result_one_list_missed_keeps_its_score_from_that_list():
+    """Each list keeps only its best 4 x top_k. A passage meaning ranks first but keyword's short list left out is still scored
+    by its words (and the other way round), instead of counting as 'not found' and losing to passages both lists happened to keep."""
+    import embed
+    files = {f"k{i}.md": "warm cache warm cache warm cache " + " ".join(f"pad{i}x{j}" for j in range(30)) + "\n" for i in range(9)}
+    root, index = project(files)
+    index.sync()
+    e = embed.HashEmbedder(synonyms=SYN)
+    index.embed_pending(e)
+    [hit] = index.search("warm cache", top_k=1, embedder=e)  # keyword keeps 4 of the 9 equal passages
+    assert hit["meaning_rank"] == 1 and hit["keyword_rank"] is None  # outside keyword's list...
+    assert hit["bm25"] is not None and hit["match"] == "both" and hit["score"] == 1.0  # ...but still scored by its words
+
+
 def test_hybrid_finds_by_words_and_by_meaning():
     import embed
     root, index = project({
@@ -465,14 +516,28 @@ def test_hybrid_finds_by_words_and_by_meaning():
     index.embed_pending(e)
     hits, used = index.query("warm cache", embedder=e)
     assert used == "hybrid" and [h["path"] for h in hits[:2]] == ["rule.md", "keep.md"]
-    assert hits[0]["match"] == "both" and hits[0]["score"] > 0.9 and hits[0]["bm25"] > 0 and hits[0]["cosine"] > 0  # 2nd by meaning
-    assert hits[1]["match"] == "meaning" and hits[1]["bm25"] is None and 0 < hits[1]["score"] < 1
+    assert hits[0]["match"] == "both" and hits[0]["score"] > 0.8 and hits[0]["bm25"] > 0 and hits[0]["cosine"] > 0  # 2nd by meaning
+    assert hits[1]["match"] == "meaning" and hits[1]["bm25"] is None and hits[1]["score"] == 0.5  # best by meaning, no words: half
+    assert hits[0]["keyword_rank"] == 1 and hits[1]["keyword_rank"] is None and hits[1]["meaning_rank"] == 1 and hits[0]["file_lines"] == 1
     assert "other.md" not in [h["path"] for h in hits]  # below the similarity floor
     assert [h["path"] for h in index.search("warm cache", mode="keyword", embedder=e)] == ["rule.md"]
     meaning, used = index.query("warm cache", mode="meaning", embedder=e)
     assert used == "meaning" and {h["path"] for h in meaning} == {"rule.md", "keep.md"} and all(h["match"] == "meaning" for h in meaning)
     assert index.query("warm cache", mode="meaning")[1] == "keyword"  # no embedder: falls back, and says so
     assert [h["path"] for h in index.search("hot", path_prefix="rule.md", embedder=e)] == ["rule.md"]
+    # the trace says how a search went, for the chat and the Knowledge tab to explain it
+    trace = {}
+    index.query("warm cache", embedder=e, trace=trace)
+    assert trace["asked"] == trace["used"] == "hybrid" and trace["searched"] == 3 and trace["embedded"] == 3
+    assert trace["keyword_found"] == 1 and trace["meaning_found"] == 2 and trace["fused"] == 2 and trace["kept"] == 2
+    assert trace["floor"] == e.min_similarity and trace["prefix"] is None and trace["tests_down"] is False
+    assert [c["path"] for c in trace["candidates"]["keyword"]] == ["rule.md"] and [c["rank"] for c in trace["candidates"]["meaning"]] == [1, 2]
+    fallback = {}
+    index.query("warm cache", trace=fallback)  # no embedder: keyword only, and the trace says meaning was not used
+    assert fallback["used"] == "keyword" and fallback["meaning_found"] is None and fallback["floor"] is None
+    scoped = {}
+    index.query("hot", path_prefix="rule.md", embedder=e, trace=scoped)
+    assert scoped["searched"] == 1 and scoped["embedded"] == 1 and scoped["prefix"] == "rule.md"
 
 
 def test_vector_math_with_and_without_numpy():
@@ -604,6 +669,65 @@ def test_search_docs_reports_sources_to_front_ends_only():
 def test_status_and_describe():
     assert "2 added" in rag.describe({"files": 2, "added": 2, "updated": 0, "removed": 0, "unchanged": 0, "chunks": 4, "seconds": 0.1})
     assert "another task" in rag.describe(None)
+
+
+# ---------- what to search: .gitignore and the person's choice ----------
+
+def test_gitignore_rules_follow_git():
+    import ignore
+    rules = "# build\n*.egg-info/\ndist/\n/local.txt\n*.log\n!keep.log\ndocs/**/draft-*\n"
+    root, _ = project({".gitignore": rules, "sub/.gitignore": "secret-notes.md\n"})
+    i = ignore.Ignore(root)
+    assert i.ignored("pkg.egg-info", True) and i.ignored("pkg.egg-info/PKG-INFO") and not i.ignored("pkg.egg-info")  # folders only
+    assert i.ignored("dist/app.js") and i.ignored("ui/dist", True)  # no slash in the pattern: any depth
+    assert i.ignored("local.txt") and not i.ignored("sub/local.txt")  # a leading slash anchors it to that .gitignore's folder
+    assert i.ignored("a/b/run.log") and not i.ignored("keep.log")  # ! re-includes
+    assert i.ignored("docs/x/y/draft-1.md") and not i.ignored("docs/final.md")
+    assert i.ignored("sub/secret-notes.md") and not i.ignored("secret-notes.md")  # a nested .gitignore covers its own folder
+
+
+def test_gitignored_and_unchosen_files_are_left_out_and_say_why():
+    root, index = project({".gitignore": "out/\n*.tmp\n", "out/a.txt": "x\n", "b.tmp": "x\n", "src/keep.py": "x = 1\n",
+                           "copies/old.md": "# Old\n", "notes.md": "# Notes\n"})
+    index.sync()
+    cov = index.coverage()
+    assert set(cov["files"]) == {".gitignore", "src/keep.py", "copies/old.md", "notes.md"}
+    assert cov["skipped"]["out/"] == "gitignored" and cov["skipped"]["b.tmp"] == "gitignored"  # a folder is recorded once
+    index.choose(excluded=["copies", "notes.md"], included=["out"])
+    index.sync()
+    cov = index.coverage()
+    assert set(cov["files"]) == {".gitignore", "src/keep.py", "out/a.txt"}
+    assert cov["skipped"]["copies/"] == "not_chosen" and cov["skipped"]["notes.md"] == "not_chosen"
+    assert index.status()["skipped_folders"] == {"not_chosen": 1} and index.status()["skipped"]["not_chosen"] == 1
+    assert index.update_paths(["copies/new.md"]) and "copies/new.md" not in index.coverage()["files"]  # a write follows the choice too
+
+
+def test_nothing_is_indexed_before_a_choice_when_auto_is_off():
+    root, index = project({"a.md": "# A\n", "logo.png": b"\x89PNG\x00", ".gitignore": "build-out/\n", "build-out/x.js": "y\n"})
+    old = rag.AUTO
+    rag.AUTO = False
+    try:
+        assert index.selection() is None and not index.allowed()
+        plan = index.plan()
+        assert plan["files"] == 2 and plan["left_out"] == 1 and plan["gitignored"] == 1 and not plan["empty"] and plan["chosen"] is None
+        assert [r["path"] for r in plan["folders"]] == ["build-out", ""] and plan["folders"][0]["gitignored"]
+        index.choose(off=True)
+        assert not index.allowed() and index.status()["selection"]["off"]
+        index.choose()
+        assert index.allowed()
+    finally:
+        rag.AUTO = old
+    assert project({})[1].plan()["empty"]
+
+
+def test_updates_are_remembered_by_what_started_them():
+    root, index = project({"a.md": "# A\n"})
+    index.sync(trigger="start")
+    index.sync(trigger="before search")  # nothing changed: not worth a line
+    (root / "b.md").write_text("# B\n")
+    index.update_paths(["b.md"])
+    assert [r["trigger"] for r in index.status()["recent"]] == ["start", "agent wrote"]
+    assert index.status()["recent"][0]["added"] == 1
 
 
 if __name__ == "__main__":

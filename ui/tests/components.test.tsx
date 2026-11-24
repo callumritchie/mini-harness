@@ -153,58 +153,71 @@ describe("ToolCard for search_docs", () => {
   const search = { kind: "tool" as const, id: "s", name: "search_docs", display: "search_docs(frozen prefix)", input: { query: "frozen prefix" },
     result: "2 passages for 'frozen prefix' (index: 4 files, ranked by keyword match):\n\ndocs/cache.md:10-49 ...", isError: false, status: "done" as const, outcome: "2 passages", sources };
 
-  it("lists the passages best first, with a bar scaled to the best one", () => {
-    const { container } = render(<ToolCard item={search} />);
-    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
-    const rows = [...container.querySelectorAll(".source-where")].map((b) => b.textContent);
-    expect(rows).toEqual(["docs/cache.md:10–49", "src/app.py:1–2"]);
-    const bars = [...container.querySelectorAll<HTMLElement>(".source-bar > span")].map((b) => b.style.width);
-    expect(bars).toEqual(["100%", "25%"]);
-    expect(container.querySelector(".tool-out")).toBeNull(); // the passages replace the text written for the model
+  it("lists the chunks best first, file name first, each drawn where it sits in its file", () => {
+    const withLines = [{ ...sources[0], file_lines: 4 }, { ...sources[1], file_lines: 100 }];
+    const { container } = render(<ToolCard item={{ ...search, sources: withLines }} />);
+    fireEvent.click(screen.getByText("Searched your files for “frozen prefix”"));
+    expect(container.querySelector(".rc-summary")?.textContent).toBe("2 chunks from 2 files");
+    expect([...container.querySelectorAll(".rc-where")].map((b) => b.textContent)).toEqual(["cache.md 10–49", "app.py 1–2"]);
+    expect([...container.querySelectorAll(".rc-dir")].map((d) => d.textContent)).toEqual(["docs", "src"]);
+    const bar = container.querySelector<HTMLElement>(".file-bar > span")!; // lines 10-49 of 100: from 9% across, 40% wide
+    expect([bar.style.left, bar.style.width]).toEqual(["9%", "40%"]);
+    expect(container.querySelector(".rc-meta")?.textContent).toContain("40 of 100 lines");
+    expect(container.querySelector(".tool-out")).toBeNull(); // the chunks replace the text written for the model
     expect(screen.getByText("Copy output")).toBeTruthy();
   });
 
-  it("shows a snippet as text on request, and opens a passage at its lines in Files", () => {
+  it("shows a chunk's text on request, as text, and opens it at its lines in Files", () => {
     const { container } = render(<ToolCard item={search} />);
-    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
+    fireEvent.click(screen.getByText("Searched your files for “frozen prefix”"));
     expect(container.querySelector(".source-snippet")).toBeNull();
-    fireEvent.click(screen.getByLabelText("Show the passage docs/cache.md:10–49"));
+    fireEvent.click(screen.getByLabelText("Show the text of cache.md 10–49"));
     expect(container.querySelector(".source-snippet")?.textContent).toBe("The frozen <b>prefix</b> rule.");
     expect(container.querySelector(".source-snippet b")).toBeNull();
-    fireEvent.click(screen.getByText("src/app.py:1–2"));
+    fireEvent.click(screen.getByTitle("Open src/app.py:1–2 in Files"));
     expect(useStore.getState()).toMatchObject({ rightTab: "files", rightOpen: true, selectedFile: "src/app.py", selectedRange: { start: 1, end: 2 } });
   });
 
-  it("says which ranking found a passage when meaning was used", () => {
-    const { container } = render(<ToolCard item={{ ...search, sources: [{ ...sources[1], match: "both", bm25: 2.1, cosine: 0.71 },
-      { ...sources[0], match: "meaning", bm25: null, cosine: 0.6 }, { ...sources[0], chunk_id: "c3", path: "x.py", match: "keyword", bm25: 1.2, cosine: null }] }} />);
-    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
-    expect([...container.querySelectorAll(".source-match")].map((c) => c.textContent)).toEqual(["words + meaning", "meaning"]);
-    expect(container.querySelector(".source-score")?.getAttribute("title")).toContain("meaning (cosine similarity) 0.71");
+  it("says how each chunk was found: by which way, and its place in each ranking", () => {
+    const trace = { query: "frozen prefix", asked: "hybrid" as const, used: "hybrid" as const, prefix: null, searched: 600, embedded: 600, files: 40, pool: 20,
+      keyword_found: 20, meaning_found: 20, floor: 0.5, shown: 2 };
+    const { container } = render(<ToolCard item={{ ...search, search: trace, sources: [{ ...sources[1], match: "both", keyword_rank: 2, meaning_rank: 1 },
+      { ...sources[0], match: "meaning", keyword_rank: null, meaning_rank: 3 }] }} />);
+    fireEvent.click(screen.getByText("Searched your files for “frozen prefix”"));
+    expect([...container.querySelectorAll(".rc-match")].map((c) => c.textContent)).toEqual(["keyword + meaning", "meaning"]);
+    fireEvent.click(screen.getByText("How found"));
+    expect([...container.querySelectorAll(".rc-rank")].map((r) => r.textContent)).toEqual(["keyword #2", "meaning #1", "not in keyword's top 20", "meaning #3"]);
+    act(() => useStore.setState({ retrievalView: "where" }));
   });
 
-  it("shows the section a passage starts in, and marks test files", () => {
+  it("shows the section a chunk starts in, and marks test files", () => {
     const { container } = render(<ToolCard item={{ ...search, sources: [{ ...sources[1], heading: "Design › The frozen-prefix rule" },
       { ...sources[0], path: "tests/test_rag.py", is_test: true }] }} />);
-    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
-    expect(container.querySelector(".source-heading")?.textContent).toBe("§ Design › The frozen-prefix rule");
-    expect(container.querySelectorAll(".source-heading")).toHaveLength(1); // no heading, nothing shown
-    const rows = [...container.querySelectorAll(".source")];
-    expect(rows[1].querySelector(".source-test")?.textContent).toBe("test");
-    expect(rows[0].querySelector(".source-test")).toBeNull();
+    fireEvent.click(screen.getByText("Searched your files for “frozen prefix”"));
+    expect(container.querySelector(".rc-heading")?.textContent).toBe("§ Design › The frozen-prefix rule");
+    expect(container.querySelectorAll(".rc-heading")).toHaveLength(1); // no heading, nothing shown
+    const rows = [...container.querySelectorAll(".rc-row")];
+    expect(rows[1].textContent).toContain("test");
+    expect(rows[0].querySelector(".chip:not(.rc-match)")).toBeNull();
   });
 
-  it("says a near-zero score is near zero instead of 0.00", () => {
-    const { container } = render(<ToolCard item={{ ...search, sources: [{ ...sources[0], score: 0.000003 }] }} />);
-    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
-    expect(container.querySelector(".source-num")?.textContent).toBe("<0.01");
-    expect(container.querySelector(".source-score")?.getAttribute("title")).toContain("almost every passage");
+  it("explains why these were kept: both rankings side by side, the kept ones numbered", () => {
+    const cand = (path: string, rank: number, id: string) => ({ chunk_id: id, path, start_line: 1, end_line: 60, rank, score: 1 });
+    const trace = { query: "q", asked: "hybrid" as const, used: "hybrid" as const, prefix: null, searched: 600, embedded: 600, files: 40, pool: 20,
+      keyword_found: 2, meaning_found: 2, floor: 0.5, shown: 2,
+      candidates: { keyword: [cand("docs/cache.md", 1, "c1"), cand("other.md", 2, "c9")], meaning: [cand("src/app.py", 1, "c2"), cand("docs/cache.md", 2, "c1")] } };
+    const { container } = render(<ToolCard item={{ ...search, search: trace }} />);
+    fireEvent.click(screen.getByText("Searched your files for “frozen prefix”"));
+    fireEvent.click(screen.getByText("Why these?"));
+    const cols = [...container.querySelectorAll(".why-col")].map((c) => [...c.querySelectorAll("li")].map((li) => li.textContent));
+    expect(cols).toEqual([["1cache.md:11", "2other.md:1"], ["1app.py:12", "2cache.md:11"]]); // rank, file:line, kept number
+    expect(container.querySelector(".why-note")?.textContent).toContain("lists its best 20");
   });
 
   it("falls back to the plain result without sources", () => {
     const { container } = render(<ToolCard item={{ ...search, sources: undefined, result: "No passages match 'zebra' in the index (4 files)." }} />);
-    fireEvent.click(screen.getByText("search_docs(frozen prefix)"));
-    expect(container.querySelector(".sources")).toBeNull();
+    fireEvent.click(screen.getByText("Searched your files for “frozen prefix”"));
+    expect(container.querySelector(".retrieval")).toBeNull();
     expect(container.querySelector(".tool-out")?.textContent).toContain("No passages match");
   });
 });

@@ -124,6 +124,56 @@ class Chat:
         self.ctl.start()
         if self.ctl.client_error:
             print(self.ctl.client_error, file=sys.stderr)  # still let them start and use /model
+        self.first_open()
+
+    def first_open(self):
+        """A folder nobody has chosen for yet: ask once what the agent may search. Nothing is indexed before an answer; an empty
+        folder, --no-index or a run without a terminal is not asked (Ctrl-C or Ctrl-D: asked again next time)."""
+        if not sys.stdin.isatty() or getattr(self.args, "no_index", False):
+            return
+        try:
+            plan = self.ctl.index_plan()
+        except Exception:  # noqa: BLE001 - no FTS5, or the index cannot be read: the tools say so when used
+            return
+        if plan["chosen"] is not None or plan["empty"]:
+            return
+        size = f"{plan['bytes'] / 1e6:.1f} MB" if plan["bytes"] >= 1e6 else f"{max(1, round(plan['bytes'] / 1e3))} KB"
+        print(f"\nThis folder isn't indexed yet: {plan['files']:,} text files ({size}) the agent could search.")
+        notes = [f"{plan['gitignored']:,} more left out by .gitignore" if plan["gitignored"] else "",
+                 f"{plan['left_out']:,} images, binaries or secret files are never searched" if plan["left_out"] else ""]
+        if any(notes):
+            print("  " + "; ".join(n for n in notes if n) + ".")
+        print("Let the agent search it? Everything stays on this computer (first time: a 130 MB model download for search by meaning).")
+        try:
+            answer = input("  [Y] everything   [c] choose folders   [n] not now: ").strip().lower()
+            if answer in ("n", "no"):
+                print(self.ctl.choose_search(off=True))
+                return
+            excluded, included = [], []
+            if answer in ("c", "choose"):
+                rows = [r for r in plan["folders"] if r["path"]]
+                on = {r["path"]: not r["gitignored"] for r in rows}
+                while True:
+                    for i, r in enumerate(rows, 1):
+                        tag = " (.gitignore)" if r["gitignored"] else ""
+                        count = r["files"] + r["gitignored_files"]
+                        print(f"  {i:>2} [{'x' if on[r['path']] else ' '}] {safety.printable(r['path'])}/ ({count:,}){tag}")
+                    top = next((r for r in plan["folders"] if not r["path"]), None)
+                    if top:
+                        print(f"      [x] files at the top ({top['files']:,})")
+                    picked = input("  Toggle by number (e.g. 2 5), Enter to start: ").split()
+                    if not picked:
+                        break
+                    for n in picked:
+                        if n.isdigit() and 1 <= int(n) <= len(rows):
+                            path = rows[int(n) - 1]["path"]
+                            on[path] = not on[path]
+                gitignored = {r["path"] for r in rows if r["gitignored"]}
+                excluded = [p for p, v in on.items() if not v and p not in gitignored]
+                included = [p for p, v in on.items() if v and p in gitignored]
+            print(self.ctl.choose_search(excluded=excluded, included=included))
+        except (EOFError, KeyboardInterrupt):
+            print("\nNot indexed for now; you'll be asked next time (or run /index).")
 
     def banner(self):
         c, s = self.ctl, self.ctl.session
