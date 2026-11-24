@@ -83,6 +83,7 @@
   /* motion: strong ease-out for anything responding to the person; durations stay under 250ms except dialogs */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --dur-press: 160ms; --dur-pop: 150ms; --dur-dialog: 200ms;
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1); --dur-card: 200ms; --dur-drawer: 280ms;
 
   /* type */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;   /* NEW */
@@ -621,6 +622,30 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
 .overlay .dialog { transition: opacity var(--dur-dialog) var(--ease-out), transform var(--dur-dialog) var(--ease-out); }
 @starting-style { .overlay .dialog { opacity: 0; transform: scale(0.96); } }
 
+/* the moments the agent hands control back (ask, plan) and the goal card rise into place; they come from live state only, so a
+   resumed session doesn't replay them. Chat messages and tool rows never animate: they arrive constantly and a resume mounts them all. */
+.ask, .plan-card { transition: opacity var(--dur-card) var(--ease-out), transform var(--dur-card) var(--ease-out); }
+@starting-style { .ask, .plan-card { opacity: 0; transform: translateY(6px); } }
+.goalcard { transition: opacity var(--dur-card) var(--ease-out), transform var(--dur-card) var(--ease-out); }
+@starting-style { .goalcard { opacity: 0; transform: translateY(-6px); } }
+
+/* "Working…" breathes, so working reads differently from stuck; opacity only, nothing moves */
+.thinking { animation: breathe 1.6s ease-in-out infinite; }
+@keyframes breathe { 50% { opacity: .55; } }
+
+/* drawers (narrow windows only) come from their own edge; docked panels and Cmd+B at desktop widths stay instant. Closing is
+   instant: React unmounts the panel. */
+@media (max-width: 760px) {
+  .sidebar { transition: transform var(--dur-drawer) var(--ease-drawer); }
+  @starting-style { .sidebar { transform: translateX(-100%); } }
+}
+@media (max-width: 1100px) {
+  .rightpanel { transition: transform var(--dur-drawer) var(--ease-drawer); }
+  @starting-style { .rightpanel { transform: translateX(100%); } }
+  .backdrop { transition: opacity var(--dur-card) var(--ease-out); }
+  @starting-style { .backdrop { opacity: 0; } }
+}
+
 /* reduced motion: no movement or scaling; the fades stay, they help you see what appeared */
 @media (prefers-reduced-motion: reduce) {
   .spinner, .cursor { animation: none; }
@@ -628,4 +653,9 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
   .btn:active, .btn-icon:active, .perm:active, .setbtn:active, .cfoot .cmds:active, .composer .send:active, .sidebar .new:active { transform: none; }
   .pop, .overlay .dialog { transition: opacity var(--dur-pop) ease; }
   @starting-style { .pop, .overlay .dialog { transform: none; } }
+  .thinking { animation: none; }
+  .ask, .plan-card, .goalcard { transition: opacity var(--dur-card) ease; }
+  @starting-style { .ask, .plan-card, .goalcard { transform: none; } }
+  .sidebar, .rightpanel { transition: none; }
+  @starting-style { .sidebar, .rightpanel { transform: none; } }
 }
