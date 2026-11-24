@@ -107,6 +107,8 @@ export interface ChatState {
   rightTab: RightTab;
   rightOpen: boolean;
   sidebarOpen: boolean;
+  /** The last open or close came from a shortcut or a resize, so the drawer doesn't animate (keyboard actions never do). */
+  sidebarInstant: boolean;
   selectedChange: string | null;
   selectedFile: string | null;
   showGoal: boolean;
@@ -147,6 +149,7 @@ export const initialState: ChatState = {
   rightTab: "files",
   rightOpen: true,
   sidebarOpen: true,
+  sidebarInstant: false,
   selectedChange: null,
   selectedFile: null,
   showGoal: false,

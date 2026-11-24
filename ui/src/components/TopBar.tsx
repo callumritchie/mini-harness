@@ -21,7 +21,7 @@ export function TopBar() {
     <>
       <header className="topbar">
         {/* only shown when the session list is not already beside the chat (narrow windows, or closed with ⌘B) */}
-        <button className={`btn-icon sessions-toggle ${s.sidebarOpen ? "docked" : ""}`} onClick={() => s.patch({ sidebarOpen: !s.sidebarOpen })}
+        <button className={`btn-icon sessions-toggle ${s.sidebarOpen ? "docked" : ""}`} onClick={() => s.patch({ sidebarOpen: !s.sidebarOpen, sidebarInstant: false })}
           aria-label="Toggle sessions" title="Sessions (⌘B)"><Icon name="menu" size={16} /></button>
         <div className="project" title={info.project}>
           <span className="crumb-project">{info.project.split("/").pop()}</span>

@@ -38,7 +38,7 @@ export default function App() {
     else if (window.innerWidth <= 1100) patch({ rightOpen: false });
     const resized = () => {
       const { sidebarOpen, rightOpen } = useStore.getState();
-      if (window.innerWidth <= 760 && sidebarOpen && rightOpen) patch({ sidebarOpen: false });
+      if (window.innerWidth <= 760 && sidebarOpen && rightOpen) patch({ sidebarOpen: false, sidebarInstant: true });
     };
     window.addEventListener("resize", resized);
     const keys = (e: KeyboardEvent) => {
@@ -52,7 +52,7 @@ export default function App() {
         document.getElementById("composer")?.focus();
       } else if (e.key.toLowerCase() === "b") {
         e.preventDefault();
-        patch({ sidebarOpen: !useStore.getState().sidebarOpen });
+        patch({ sidebarOpen: !useStore.getState().sidebarOpen, sidebarInstant: true }); // a shortcut: never animated
       }
     };
     window.addEventListener("keydown", keys);

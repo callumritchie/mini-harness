@@ -84,6 +84,7 @@
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --dur-press: 160ms; --dur-pop: 150ms; --dur-dialog: 200ms;
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1); --dur-card: 200ms; --dur-drawer: 280ms;
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); --dur-snap: 100ms; --dur-leave: 200ms;
 
   /* type */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;   /* NEW */
@@ -286,7 +287,7 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
 .paused-strip { display: flex; align-items: center; gap: 10px; background: var(--accent-surface); border: 1px solid var(--accent-surface-line); color: var(--accent-ink); border-radius: var(--radius-card); padding: 8px 12px; font-size: var(--fs-md); }
 .paused-strip span:nth-child(2) { flex: 1; min-width: 0; }
 .wait-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); flex: none; display: inline-block; }
-.contextbar { height: 2px; background: var(--hover); flex: none; } .contextbar .fill { height: 100%; width: 100%; background: var(--text-3); transform-origin: left; transition: transform 300ms var(--ease-out); } .contextbar .fill.high { background: var(--warn); }
+.contextbar { height: 2px; background: var(--hover); flex: none; } .contextbar .fill { height: 100%; width: 100%; background: var(--text-3); transform-origin: left; transition: transform 250ms var(--ease-in-out); } .contextbar .fill.high { background: var(--warn); }
 .settings { position: relative; }
 .pop { position: absolute; right: 0; top: calc(100% + 8px); width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 12px; z-index: 15; display: flex; flex-direction: column; gap: 12px; }
 .pop label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
@@ -352,6 +353,7 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
 .codeblock pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius-card); padding: 10px 12px; overflow-x: auto; white-space: pre; margin: 0; }
 .codeblock .copy { position: absolute; top: 6px; right: 6px; opacity: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: var(--fs-xs); padding: 2px 8px; color: var(--muted); transition: opacity .12s; }
 .codeblock:hover .copy, .codeblock .copy:focus-visible { opacity: 1; }
+@media (hover: none) { .codeblock .copy { opacity: 1; } } /* touch has no hover: Copy is always shown */
 .markdown :not(pre) > code { background: var(--code-bg); color: var(--text-2); border-radius: 4px; padding: 1px 5px; }
 .markdown .table-wrap { max-width: 100%; overflow-x: auto; margin: .7em 0; } .markdown .table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .markdown table { border-collapse: collapse; } .markdown th, .markdown td { border: 1px solid var(--line); padding: 4px 8px; }
@@ -612,7 +614,7 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
    so exits are instant, which is also the right speed for an exit. */
 .btn, .btn-icon, .perm, .setbtn, .cfoot .cmds, .composer .send, .sidebar .new { transition: transform var(--dur-press) var(--ease-out); }
 .btn:active:not(:disabled), .btn-icon:active:not(:disabled), .perm:active, .setbtn:active, .cfoot .cmds:active,
-.composer .send:active:not(:disabled), .sidebar .new:active:not(:disabled) { transform: scale(0.97); }
+.composer .send:active:not(:disabled), .sidebar .new:active:not(:disabled) { transform: scale(0.97); transition-duration: var(--dur-snap); } /* the press snaps; the release eases back */
 
 .pop { transform-origin: top right; transition: opacity var(--dur-pop) var(--ease-out), transform var(--dur-pop) var(--ease-out); }
 @starting-style { .pop { opacity: 0; transform: scale(0.97); } }
@@ -638,17 +640,22 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
 @media (max-width: 760px) {
   .sidebar { transition: transform var(--dur-drawer) var(--ease-drawer); }
   @starting-style { .sidebar { transform: translateX(-100%); } }
+  .sidebar.closing { transform: translateX(-100%); transition: transform var(--dur-leave) var(--ease-out); pointer-events: none; }
+  .sidebar[data-instant] { transition: none; } /* opened or closed with Cmd+B: keyboard actions never animate */
 }
 @media (max-width: 1100px) {
   .rightpanel { transition: transform var(--dur-drawer) var(--ease-drawer); }
   @starting-style { .rightpanel { transform: translateX(100%); } }
+  .rightpanel.closing { transform: translateX(100%); transition: transform var(--dur-leave) var(--ease-out); pointer-events: none; }
   .backdrop { transition: opacity var(--dur-card) var(--ease-out); }
   @starting-style { .backdrop { opacity: 0; } }
+  .backdrop.closing { opacity: 0; transition-duration: var(--dur-leave); pointer-events: none; }
 }
 
 /* reduced motion: no movement or scaling; the fades stay, they help you see what appeared */
 @media (prefers-reduced-motion: reduce) {
-  .spinner, .cursor { animation: none; }
+  .cursor { animation: none; }
+  .spinner { animation: breathe 1.6s ease-in-out infinite; } /* a frozen spinner reads as stuck: it breathes instead of turning */
   .btn, .btn-icon, .perm, .setbtn, .cfoot .cmds, .composer .send, .sidebar .new, .contextbar .fill { transition: none; }
   .btn:active, .btn-icon:active, .perm:active, .setbtn:active, .cfoot .cmds:active, .composer .send:active, .sidebar .new:active { transform: none; }
   .pop, .overlay .dialog { transition: opacity var(--dur-pop) ease; }
