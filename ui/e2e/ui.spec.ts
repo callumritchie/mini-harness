@@ -162,7 +162,7 @@ test("the whole demo walk-through", async ({ page }) => {
   await expect(page.locator(".diff-body.wrap")).toBeVisible();
   await page.screenshot({ path: shot("19-diff-modified") });
   await page.setViewportSize({ width: 420, height: 800 }); // the side panel becomes a drawer; long lines wrap inside it
-  await page.getByRole("button", { name: "Close sessions" }).click();
+  await expect(page.locator(".sidebar")).toHaveCount(0); // two drawers would overlap: the session list closes, the panel in use stays
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
   await page.screenshot({ path: shot("20-diff-narrow") });
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -296,4 +296,26 @@ test("a wrong token gets nothing, and the page says what to do", async ({ page, 
   expect((await request.get("/api/info", { headers: { Authorization: "Bearer wrong" } })).status()).toBe(401);
   await page.goto("/");
   await expect(page.getByText("needs the private address")).toBeVisible();
+});
+
+test("worst-case data never makes the chat or the page scroll sideways", async ({ page }) => {
+  // the break-ui fixture (demo.py, "worst case"): a deep path, 1,200 files, a wide table and a 140-character URL in the reply
+  await page.setViewportSize({ width: 1280, height: 820 }); // both side panels open: the narrowest chat column on a laptop
+  await page.goto(URL);
+  const box = page.locator("#composer");
+  await box.fill("worst case: migrate every customer record under src/integrations/northwind-industries-holdings to the 2027 schema");
+  await box.press("Enter");
+  const dialog = page.getByRole("alertdialog", { name: /Permission needed/ });
+  const done = page.getByText(/Done\. I migrated/);
+  await expect(dialog.or(done)).toBeVisible({ timeout: 20_000 });
+  if (await dialog.isVisible()) await dialog.getByRole("button", { name: "Allow" }).click(); // the walk-through may have left Allow on
+  await expect(done).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".tool-display", { hasText: "glob(" }).locator("xpath=ancestor::button[1]")).toContainText(/200 of 1,20\d files/);
+  const sideways = () => page.evaluate(() => {
+    const chat = document.querySelector(".chat")!;
+    return { chat: chat.scrollWidth - chat.clientWidth, page: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+  });
+  expect(await sideways()).toEqual({ chat: 0, page: 0 });
+  await page.setViewportSize({ width: 420, height: 800 });
+  expect(await sideways()).toEqual({ chat: 0, page: 0 });
 });

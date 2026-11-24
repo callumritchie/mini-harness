@@ -1,5 +1,6 @@
-import { useRef, useState, type ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
+import { memo, useRef, useState, type ReactNode } from "react";
+import { splitBlocks } from "../lib/stream";
+import ReactMarkdown, { type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 
@@ -18,26 +19,36 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
+const COMPONENTS = {
+  a: ({ href, children }: { href?: string; children?: ReactNode }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer nofollow">
+      {children}
+    </a>
+  ),
+  pre: ({ children }: { children?: ReactNode }) => <CodeBlock>{children}</CodeBlock>,
+  // a wide table scrolls on its own instead of pushing the whole chat sideways; numbers in it never wrap
+  table: ({ children }: { children?: ReactNode }) => <div className="table-wrap" tabIndex={0} role="region" aria-label="Table"><table>{children}</table></div>,
+  img: ({ alt }: { alt?: string }) => <span className="blocked-image">[image: {alt || "not loaded"}]</span>,
+};
+const REMARK: Options["remarkPlugins"] = [remarkGfm];
+const REHYPE: Options["rehypePlugins"] = [[rehypeHighlight, { detect: false, ignoreMissing: true }]];
+
+/** One run of markdown. Memoised on its text, so a streaming message's finished blocks are not parsed or highlighted again. */
+const Block = memo(function Block({ text }: { text: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={REHYPE} components={COMPONENTS}>
+      {text}
+    </ReactMarkdown>
+  );
+});
+
 /** Markdown from a model. No raw HTML is rendered (react-markdown's default), links open in a new tab, and images are not loaded
- *  (a remote image URL can leak data), they show their alt text instead. */
-export function Markdown({ text }: { text: string }) {
+ *  (a remote image URL can leak data), they show their alt text instead. While `streaming`, the text is rendered block by block so
+ *  each new word re-renders only the last block; a finished message is rendered whole. */
+export function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   return (
     <div className="markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeHighlight, { detect: false, ignoreMissing: true }]]}
-        components={{
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noopener noreferrer nofollow">
-              {children}
-            </a>
-          ),
-          pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-          img: ({ alt }) => <span className="blocked-image">[image: {alt || "not loaded"}]</span>,
-        }}
-      >
-        {text}
-      </ReactMarkdown>
+      {streaming ? splitBlocks(text).map((b, i) => <Block key={i} text={b} />) : <Block text={text} />}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { diffRows, diffStats } from "../lib/diff";
 import { useStore } from "../store";
 import { DiffView } from "./DiffView";
+import { PathLabel } from "./PathLabel";
 
 export function ChangesPanel() {
   const changes = useStore((s) => s.changes);
@@ -34,7 +35,8 @@ export function ChangesPanel() {
           return (
             <li key={p}>
               <button className={p === current ? "is-selected" : ""} onClick={() => patch({ selectedChange: p })}>
-                <span className="name">{p}{isNew && <span className="mark new">NEW</span>}</span>
+                <PathLabel path={p} className="name" />
+                {isNew && <span className="mark new">NEW</span>}
                 <span className="add">+{stats[p].added}</span>{!isNew && <span className="del">−{stats[p].removed}</span>}
               </button>
             </li>

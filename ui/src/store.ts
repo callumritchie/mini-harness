@@ -107,6 +107,8 @@ export interface ChatState {
   rightTab: RightTab;
   rightOpen: boolean;
   sidebarOpen: boolean;
+  /** The last open or close came from a shortcut or a resize, so the drawer doesn't animate (keyboard actions never do). */
+  sidebarInstant: boolean;
   selectedChange: string | null;
   selectedFile: string | null;
   showGoal: boolean;
@@ -147,6 +149,7 @@ export const initialState: ChatState = {
   rightTab: "files",
   rightOpen: true,
   sidebarOpen: true,
+  sidebarInstant: false,
   selectedChange: null,
   selectedFile: null,
   showGoal: false,
@@ -382,6 +385,8 @@ export const SLASH_HELP = [
 
 interface Actions {
   apply(ev: ServerEvent): void;
+  /** Several events in order, as one update (one render). */
+  applyAll(events: ServerEvent[]): void;
   setSocket(socket: Socket | null): void;
   /** Send a message (or run a slash command). Returns false when nothing was sent, so the message box keeps its text. */
   submit(text: string, files?: (Uploaded & { preview?: string })[]): boolean;
@@ -420,6 +425,7 @@ export const useStore = create<ChatState & Actions>((set, get) => {
     ...initialState,
     wrap: readWrap(),
     apply: (ev) => set((s) => reduce(s, ev)),
+    applyAll: (events) => set((s) => events.reduce(reduce, s)),
     setSocket: (sock) => {
       socket = sock;
     },

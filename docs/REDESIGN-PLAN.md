@@ -275,6 +275,28 @@ Lines did not wrap, and no screenshot had ever shown a removal (the demo only cr
 - **Tool cards:** they show their own call's change (the store attaches each `file_change` to the running write/edit for that path), not
   the session's.
 
+## Phase 14: worst-case data, polish and motion (2026-11-24)
+
+A pass with the design-engineering skills (break-ui, emil-design-eng, find-animation-opportunities, animation-performance,
+review-animations, learn-taste). The rules it produced are in `DESIGN.md` › "Web UI rules".
+
+- **14a, worst-case data** (`4531707`): demo keywords `worst case` and `one`, and a dev-only **Demo data / Worst case / One / Empty** toggle
+  (Vite dev server + `--demo`). Fixed: glob/grep counts ("200 of 1,200 files"), the top bar's session title squeezed to nothing, wide tables
+  and long URLs pushing the chat sideways, mid-word breaks in the approval dialog, paths shown file name first (`PathLabel`), the NEW
+  badge clipped, `−0` on new files, two drawers overlapping after a resize. Server: a reload's late-closing socket detached the new one.
+- **14b, polish** (`de12ffc`): motion tokens, press feedback, menus from their trigger, dialog entry, context bar on `transform`.
+- **14c, motion** (`ed4362e`): ask/plan and goal cards rise in, drawers slide from their edge, "Working…" breathes. Chat messages, tool
+  rows, tool card expand, the tab switch and every shortcut stay instant.
+- **14d, streaming performance** (`bad3f60`): streamed words batched per frame and finished markdown blocks memoised. A reply with 12
+  code blocks went from p95 117ms / worst 232ms frames to p95 17ms / worst 50ms. Demo keyword `long code` re-measures it.
+- **14e, motion review** (`742697d`): no animation on Cmd+B, drawers leave by their own edge (`usePresence`), the spinner breathes under
+  reduced motion, Copy always shown on touch, press snaps in 100ms.
+- **14f, rules and checks**: `DESIGN.md` › "Web UI rules", pointed to from `CONTRIBUTING.md` and `CLAUDE.md`; a motion lint
+  (`ui/tests/motion.test.ts`) and an e2e step that streams the worst case and asserts nothing scrolls sideways at 1280px and 420px.
+
+Not done: an Arabic comment line renders with `//` on the right in the file viewer but on the left in the diff (cause not found). Reduced
+motion and touch were checked from code only.
+
 ## Server asks (small, additive; none weakens UX-SPEC §5)
 
 1. **`tool_id` on `permission_request`**, and a `decided_by: "rule" | "judge" | "user" | null` on `tool_result`.

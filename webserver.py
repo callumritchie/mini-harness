@@ -106,9 +106,11 @@ class WebUI(UI):
         with self.lock:
             self.loop, self.queue = loop, queue
 
-    def detach(self):
+    def detach(self, queue):
+        """Stop sending to this page, unless a newer one has taken over (a refresh opens the new socket before the old one closes)."""
         with self.lock:
-            self.loop = self.queue = None
+            if self.queue is queue:
+                self.loop = self.queue = None
 
     def emit(self, type_, **data):
         event = {"type": type_, **data}
@@ -492,7 +494,7 @@ def create_app(controller, webui, token, port, dev_origins=()):
             pass
         finally:
             send_task.cancel()
-            webui.detach()  # a running task carries on; unanswered questions wait for a reconnect or Stop
+            webui.detach(queue)  # a running task carries on; unanswered questions wait for a reconnect or Stop
 
     # ---------- the built UI ----------
 

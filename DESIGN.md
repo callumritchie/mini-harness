@@ -625,6 +625,65 @@ safety control. The empty chat offers starter prompts that only fill the message
 resizable (width kept in localStorage). Below 1100px the side panel, and below 760px the session list too, become drawers. Shortcuts:
 Cmd/Ctrl+K focuses the message box, Cmd/Ctrl+B toggles the session list. Behaviour and protocol are unchanged.
 
+## Web UI rules
+
+Rules for anyone (person or agent) building or changing the web UI. Each one came from a decision made while reviewing the UI; the
+comment after it has the date and what was said. Values and tokens live in `ui/src/styles.css`.
+
+### Layout & data
+
+- **Paths always show the file name first and the folder after it, dimmed; the folder gives way first, and the full path is in the
+  tooltip.** Use `PathLabel` (`ui/src/components/PathLabel.tsx`); file tool rows do the same through `ToolDisplay` in `ToolCard.tsx`.
+  Never end-truncate a path.
+  Why: deep projects share the start of their paths, so the end is what tells files apart.
+  <!-- 2026-11-24: "I take your recommendation on the 'decisions for you'" (file name first, folder after, dimmed) -->
+- **Nothing in a reply may make the chat scroll sideways.** Wide content scrolls in its own box (tables are wrapped in `.table-wrap`), prose
+  wraps (`.markdown { overflow-wrap: break-word }`), and numbers in a table never wrap. The approval dialog wraps commands at word
+  boundaries (`overflow-wrap: anywhere`), never `word-break: break-all`.
+  Why: one wide table used to pan the whole conversation, and mid-word breaks made the command you are approving hard to read.
+  <!-- 2026-11-24: "I take your recommendation" (a wide table scrolls in its own box) -->
+- **When the top bar runs out of room, the project name goes before the session title** (it hides at a chat width of 720px or less).
+  Why: the sidebar already shows the project; the top bar is the only place the session is named.
+  <!-- 2026-11-24: "I take your recommendation" (hide the project name when space runs out) -->
+- **A cut or capped count states both numbers: "200 of 1,200 files", and "200+ matches" when a search stopped early. A new file shows only
+  `+N`, never `−0`.** Counts come from `tools.outcome`; tested in `tests/test_tools.py`.
+  Why: a count of what was shown, presented as the total, is wrong data.
+  <!-- 2026-11-24: "I take your recommendation" ("200 of 1,200 files") -->
+- **Before shipping a UI change, look at it with the dev data toggle on Worst case** (Vite dev server + `--demo`; bottom of the page;
+  `?data=worst`). Demo data is chosen, without anyone noticing, to make a design look good.
+  <!-- 2026-11-24: confirmed ("all + your recommendations") -->
+
+### Motion
+
+- **Keyboard-initiated actions never animate:** Cmd/Ctrl+B, Cmd/Ctrl+N, the `/` palette, Shift+Tab. A drawer opened with Cmd+B gets
+  `data-instant` (store: `sidebarInstant`). **Also instant:** tool card expand, chat messages and tool rows arriving, the side panel's
+  tab switch, and tooltips (native `title`).
+  Why: these happen dozens or hundreds of times a session; motion there makes the app feel slow. A resumed session also mounts every
+  message at once, so an entry animation would replay everywhere.
+  <!-- 2026-11-24: "fix all six" (no animation on Cmd+B); the instant list confirmed ("all + your recommendations") -->
+- **Motion uses the tokens and only `transform` and `opacity`:** press `scale(0.97)`, 100ms in (`--dur-snap`) and 160ms back
+  (`--dur-press`); menus 150ms from their trigger (`transform-origin: top right`); dialogs 200ms from `scale(0.96)`, centred; cards that
+  wait for you (ask, plan, goal) 200ms over 6px; drawers 280ms in (`--ease-drawer`) and 200ms out by the same edge (`usePresence`).
+  Exits are faster than entries or instant. Easing is `--ease-out` for anything entering or responding and `--ease-in-out` for a value
+  changing on screen; never `ease-in`, never `transition: all`, never a layout property. Entries use `@starting-style`.
+  Why: one crisp, consistent motion language; `transform` and `opacity` run on the compositor, so they stay smooth while a reply streams.
+  Checked by `ui/tests/motion.test.ts`.
+  <!-- 2026-11-24: "yes" (polish pass), "all 4" (card and drawer entries), "fix all six" (review fixes) -->
+- **Reduced motion keeps the fades and drops all movement and scaling. The spinner breathes (opacity) instead of freezing.**
+  Why: a frozen spinner reads as stuck.
+  <!-- 2026-11-24: "fix all six" -->
+
+### Performance
+
+- **Streaming text never re-renders the whole message per word.** Streamed deltas are applied once per animation frame
+  (`createBatcher` in `ui/src/lib/stream.ts`), and a streaming message renders block by block with finished blocks memoised
+  (`splitBlocks`); a finished message renders whole. Re-measure with the demo's `long code` keyword.
+  Why: re-rendering per word measured p95 117ms and worst 232ms frames on a fast laptop (after: p95 17ms, worst 50ms).
+  <!-- 2026-11-24: "yes, apply 1 and 2 and re-measure" -->
+- **Code stays highlighted while it streams.**
+  Why: batching and memoised blocks were enough, and highlighting late would make code change colour while you read it.
+  <!-- 2026-11-24: chose fixes 1 and 2, not 3 (defer highlighting); confirmed ("all + your recommendations") -->
+
 ## Tool patterns
 
 Rules every tool follows. A new tool must meet all of them.

@@ -268,6 +268,14 @@ assert "‮" not in shown and "\x1b" not in shown and "⟨U+202E" in shown and "
 assert webserver.clean({"command": "echo \x1b[2J" + "x" * 5000})["command"].startswith("echo ⟨ESC⟩[2J") and "more characters" in webserver.clean("y" * 5000)
 assert webserver.clean(["a​b"]) == ["a⟨U+200B ZERO WIDTH SPACE⟩b"]
 
+# ---------- a refresh whose old socket closes after the new one opens still gets events ----------
+ctl5, ui5, client5 = make(delay=0.0)
+old = client5.websocket_connect(f"/ws?token={TOKEN}", headers=WS); old.__enter__(); old.receive_json()
+new = client5.websocket_connect(f"/ws?token={TOKEN}", headers=WS); new.__enter__(); new.receive_json()
+old.__exit__(None, None, None)  # the old page's close arrives late
+new.send_json({"type": "send", "text": "hello"}); assert "done" in types(collect(new, "done"))
+new.__exit__(None, None, None)
+
 # ---------- context data and the engine hooks ----------
 data = client.get("/api/context", headers=H).json()
 assert data["total"] > 0 and "Tool definitions" in data["rows"] and data["limit"] == 60000

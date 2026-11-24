@@ -81,7 +81,7 @@ export function DiffView({ path, before, after }: { path: string; before: string
     <div className="diff" aria-label={`Changes to ${path}`}>
       <div className="diff-head">
         <span className="tag">{before === null ? "new file" : "modified"}</span>
-        <span className="dstats"><span className="add">+{stats.added}</span> <span className="del">−{stats.removed}</span></span>
+        <span className="dstats"><span className="add">+{stats.added}</span>{before !== null && <> <span className="del">−{stats.removed}</span></>}</span>
         <span className="dmeta">Since the start of this session · latest version</span>
         <button className="btn btn-xs" onClick={toggleWrap} aria-pressed={wrap} title="Wrap long lines">Wrap</button>
         <button className="btn btn-xs" onClick={copy}>{copied ? "Copied" : "Copy diff"}</button>

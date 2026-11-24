@@ -16,6 +16,9 @@ Keywords for reviewing every state (used by the screenshot test; they are not in
   fail              edit_file on a file that was not read first (an error with advice)
   cut               a reply that stops at the maximum length
   edit              reads README.md, then edits a line of it (a diff with a removal, additions and context)
+  worst case …      worst-case data for stress-testing the layout: deep paths, 1,200 files, long lines, CJK, RTL, emoji (dev toggle)
+  one               exactly one of everything, so every count reads 1 (dev toggle)
+  long code         a long reply with many highlighted code blocks, streamed (for measuring render cost while streaming)
   anything else     echoes your message
 """
 import itertools
@@ -115,6 +118,111 @@ def _last_typed(messages):
     return ""
 
 
+def _rounds(messages):
+    """How many rounds of tool results have come back since the person last typed."""
+    n = 0
+    for m in reversed(messages):
+        if m["role"] != "user":
+            continue
+        if _last_user_text([m])[1] is None:
+            return n
+        n += 1
+    return n
+
+
+# Worst-case data for the break-ui review ("worst" keyword; the dev-only data toggle sends WORST_PROMPT). Every value is something a
+# real project produces: deep monorepo paths, a person's name with diacritics in a folder, an email-shaped file name, 1,200 files in
+# one folder, a minified one-line JSON file, CJK and emoji file names, a secret-looking file, a one-letter file name.
+WORST_PROMPT = ("worst case: migrate every customer record under src/integrations/northwind-industries-holdings to the 2027 schema "
+                "and tell Aleksandra Wiśniewska-Kowalczyk when it's done")
+WORST_DIR = "src/integrations/northwind-industries-holdings/customer-records/2026-Q3/eu-west/Aleksandra-Wiśniewska-Kowalczyk"
+WORST_CJK = "docs/Ünïcödé プロジェクト"
+WORST_CMD = (f'mkdir -p "{WORST_DIR}" "{WORST_CJK}" && for i in $(seq -w 1 1200); do touch "{WORST_DIR}/customer-record-$i.json"; done'
+             f' && touch "{WORST_CJK}/会議メモ 2026-11-24 (final) v12 🚀.md" .env.production.local a')
+WORST_FILE = f"{WORST_DIR}/bartholomew.fitzgerald@northwind-industries-holdings.example.com.config.json"
+WORST_BODY = ('{"id":"cus_01JD4Z8XQ7M3N5P9R2T6V8W0YB","name":"Bartholomew Fitzgerald","email":"bartholomew.fitzgerald@northwind-industries-holdings.example.com",'
+              '"company":"Northwind Industries Holdings (EMEA) GmbH & Co. KG","seats":1284,"mrr_cents":129999900,"tags":["enterprise","eu-west","sso",'
+              '"priority-support","annual-contract","legacy-2019-pricing"],"notes":"Migrated from the 2019 CRM export; see https://wiki.northwind-industries-holdings.example.com/display/CRM/Customer+Record+Migration+2027+Schema+Rollout+Plan"}\n'
+              "// اسم العميل: بارثولوميو فيتزجيرالد — ملاحظات الترحيل\n"
+              "// ชื่อลูกค้า: บาร์โธโลมิว ฟิตซ์เจอรัลด์\n"
+              "// 🚀🔥✅ owner: Jo\n")
+WORST_HELPERS = [
+    "Check each customer record JSON under src/integrations/northwind-industries-holdings/customer-records/2026-Q3/eu-west for fields that "
+    "don't match the 2027 schema, and report them grouped by field name",
+    "Summarise README.md",
+    "Count the records",
+    "Find every place in docs/Ünïcödé プロジェクト that mentions Aleksandra Wiśniewska-Kowalczyk or bartholomew.fitzgerald@northwind-industries-holdings.example.com",
+]
+WORST_REPLY = """Done. I migrated **1,200** records. Here is what changed:
+
+| File | Owner | Seats | Monthly revenue | Status |
+|---|---|---|---|---|
+| `bartholomew.fitzgerald@northwind-industries-holdings.example.com.config.json` | Aleksandra Wiśniewska-Kowalczyk | 1,284 | $1,299,999.00 | migrated, with 3 warnings about legacy pricing fields |
+| `a` | Jo | 1 | $0.00 | skipped |
+
+The rollout plan is at https://wiki.northwind-industries-holdings.example.com/display/CRM/Customer+Record+Migration+2027+Schema+Rollout+Plan?focusedCommentId=1284&src=contextnavpagetreemode
+
+بارثولوميو فيتزجيرالد · บาร์โธโลมิว ฟิตซ์เจอรัลด์ · 会議メモ 🚀"""
+
+# A long reply with highlighted code, like a real model's answer to "refactor this": the whole message is re-parsed and
+# re-highlighted on every streamed word, so this is the heaviest thing the chat renders.
+_CODE_PY = """```python
+def migrate(record: dict, schema: dict) -> dict:
+    \"\"\"Move one customer record to the 2027 schema; unknown fields are kept under `legacy`.\"\"\"
+    out, legacy = {}, {}
+    for key, value in record.items():
+        target = schema.get(key)
+        if target is None:
+            legacy[key] = value
+        elif isinstance(value, list):
+            out[target] = [str(v).strip().lower() for v in value if v]
+        else:
+            out[target] = value
+    return {**out, "legacy": legacy} if legacy else out
+```"""
+_CODE_TS = """```typescript
+export async function migrateAll(paths: string[], schema: Record<string, string>): Promise<Report> {
+  const report: Report = { migrated: 0, skipped: [], warnings: new Map() };
+  for (const path of paths) {
+    const record = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    if (!record.id) { report.skipped.push(path); continue; }
+    const next = migrate(record, schema);
+    await writeFile(path, JSON.stringify(next, null, 2));
+    report.migrated += 1;
+  }
+  return report;
+}
+```"""
+LONG_CODE = "\n\n".join(
+    f"### Step {i + 1}: {title}\n\nThis step {what}. The function below is idempotent, so running it twice on the same folder "
+    f"changes nothing the second time.\n\n{_CODE_PY if i % 2 == 0 else _CODE_TS}"
+    for i, (title, what) in enumerate([("map the fields", "maps every old field name onto the new schema"),
+                                        ("walk the folder", "reads each record, migrates it and writes it back"),
+                                        ("keep the unknowns", "keeps fields the schema does not know under legacy"),
+                                        ("report", "counts what moved and what was skipped"),
+                                        ("normalise tags", "lower-cases and trims every tag"),
+                                        ("write atomically", "writes to a temporary file first, then renames it")] * 2))
+
+
+# One of everything, so every count reads 1 ("1 step", "+1", "1 line", "1 prompt").
+ONE_PROMPT = "one"
+
+
+def _worst(messages):
+    """The worst-case conversation: four tool calls, then four helpers, then a reply with a wide table and long URLs."""
+    rounds = _rounds(messages)
+    if rounds == 0:
+        return [_think("A big migration. I'll set up the folders, write one record, try an edit, then look at what's there."),
+                _text("I'll create the folders and records first."),
+                _tool("bash", command=WORST_CMD),
+                _tool("write_file", path=WORST_FILE, content=WORST_BODY),
+                _tool("edit_file", path=f"{WORST_DIR}/README.md", old_string="2026 schema", new_string="2027 schema"),
+                _tool("glob", pattern="src/**/*.json")], "tool_use"
+    if rounds == 1:
+        return [_text("Now I'll ask four helpers to check the records."), *[_tool("subagent", task=t) for t in WORST_HELPERS]], "tool_use"
+    return [_text(WORST_REPLY)], "end_turn"
+
+
 EDIT_OLD = "This is a throwaway folder for `--demo`."
 EDIT_NEW = "This is a scratch folder for the `--demo` mode, made fresh each time.\nNothing in it is kept."
 
@@ -123,6 +231,15 @@ def script(messages):
     """The blocks the demo model replies with, and the stop reason."""
     text, results = _last_user_text(messages)
     body = 'def greet(name):\n    return f"Hello, {name}!"\n\n\nif __name__ == "__main__":\n    print(greet("demo"))\n'
+    typed = (text if results is None else _last_typed(messages)).lower()
+    if typed.startswith("worst case"):
+        return _worst(messages)
+    if typed == "long code":
+        return [_text(LONG_CODE)], "end_turn"
+    if typed == ONE_PROMPT:
+        if results is None:  # a new name each time: write_file refuses to overwrite a file it has not read
+            return [_tool("write_file", path=f"one-{next(_ids)}.txt", content="1\n")], "tool_use"
+        return [_text("1 file written." if not results[0].get("is_error") else "That didn't work (see the card).")], "end_turn"
     if results is not None:  # we just got tool results: wrap up
         first = results[0]
         content = str(first.get("content", ""))

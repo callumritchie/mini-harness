@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { narrowerThan, reducedMotion, usePresence } from "../lib/presence";
 import { useStore, type RightTab } from "../store";
 import { ChangesPanel } from "./ChangesPanel";
 import { ContextPanel } from "./ContextPanel";
@@ -49,11 +50,13 @@ export function RightPanel() {
   const tab = useStore((s) => s.rightTab);
   const count = useStore((s) => Object.keys(s.changes).length);
   const patch = useStore((s) => s.patch);
-  if (!open) return null;
+  // as a drawer (up to 1100px) it slides back out to the right; docked or with reduced motion it just goes
+  const { mounted, closing } = usePresence(open, () => narrowerThan(1100) && !reducedMotion());
+  if (!mounted) return null;
   return (
     <>
-    <div className="backdrop right" onClick={() => patch({ rightOpen: false })} aria-hidden />
-    <aside className="rightpanel" style={{ "--right-w": `${width}px` } as React.CSSProperties}>
+    <div className={`backdrop right ${closing ? "closing" : ""}`} onClick={() => patch({ rightOpen: false })} aria-hidden />
+    <aside className={`rightpanel ${closing ? "closing" : ""}`} style={{ "--right-w": `${width}px` } as React.CSSProperties}>
       <div className={`resize ${drag ? "drag" : ""}`} onPointerDown={(e) => { e.preventDefault(); setDrag(true); }} role="separator" aria-orientation="vertical" aria-label="Resize panel" />
       <div className="tabs">
         <div className="segtabs" role="tablist">
