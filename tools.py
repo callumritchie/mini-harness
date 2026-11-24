@@ -632,7 +632,11 @@ def search_docs(a, session):
     import embed
 
     index, embedder, mode = rag.get(root), embed.loaded(), a.get("mode", "hybrid")
-    hits, used = index.query(a["query"], a.get("top_k", DEFAULT_SEARCH_RESULTS), prefix, mode, embedder)
+    if index.not_allowed_reason():
+        raise ToolError(index.not_allowed_reason())
+    trace = {}  # how the search went, for front ends to explain it (never sent to the model)
+    hits, used = index.query(a["query"], a.get("top_k", DEFAULT_SEARCH_RESULTS), prefix, mode, embedder, trace=trace)
+    trace.update(query=a["query"], files=index.counts()["files"], building=index.building)
     files = index.counts()["files"]
     notes = ""
     if index.building:
@@ -642,6 +646,7 @@ def search_docs(a, session):
     elif used != "keyword" and index.embedding:
         notes += "\n[Passages are still being embedded, so search by meaning does not cover all of them yet.]"
     if not hits:
+        _meta.value = {"search": {**trace, "shown": 0}}  # an empty search is explained too: what was searched, what each way found
         return (f"No passages match '{a['query']}' in the index ({files:,} files{' under ' + prefix if prefix else ''}). Try other words the "
                 f"text is likely to use, or fewer words; use grep for exact text or a pattern, or glob for file names.{notes}")
     shown, parts, size = [], [], 0
@@ -656,7 +661,7 @@ def search_docs(a, session):
         shown.append(h)
         parts.append(part)
         size += len(part)
-    _meta.value = {"sources": shown}
+    _meta.value = {"sources": shown, "search": {**trace, "shown": len(shown)}}
     how = {"hybrid": "words and meaning", "keyword": "keyword match", "meaning": "meaning"}[used]
     head = f"{len(shown)} passage{'' if len(shown) == 1 else 's'} for '{a['query']}' (index: {files:,} files, ranked by {how}):"
     more = f"\n[{len(hits) - len(shown)} more not shown to keep this short: ask for fewer, or narrow the folder.]" if len(shown) < len(hits) else ""
@@ -671,6 +676,8 @@ def explore_graph(a, session):
     if not rag.available():
         raise ToolError("The knowledge graph is not available: this Python's SQLite has no full-text search (FTS5). Use grep and read_file instead.")
     index = rag.get(Path.cwd().resolve())
+    if index.not_allowed_reason():
+        raise ToolError(index.not_allowed_reason())
     graph.ensure(index)
     out = graph.explore(index, a["name"], a.get("depth", 1), a.get("relation"))
     counts = index.counts()
@@ -747,7 +754,7 @@ IMPLEMENTATIONS = {f.__name__: f for f in (read_file, write_file, edit_file, bas
 
 # ---------- running ----------
 
-META_KEYS = ("sources", "graph")  # what a tool can leave for front ends: search_docs' passages, explore_graph's neighbourhood
+META_KEYS = ("sources", "graph", "search")  # for front ends: search_docs' passages and how it searched, explore_graph's neighbourhood
 _meta = threading.local()  # what the last tool run on this thread left for front ends besides its text
 
 
@@ -855,10 +862,12 @@ def outcome(name, args, text, is_error):
         return "new file" if text.startswith("Created") else "rewritten" if text.startswith("Overwrote") else None
     if name == "search_docs":
         m = re.match(r"(\d+) passages? for", text)
-        return f"{m.group(1)} passage{'' if m.group(1) == '1' else 's'}" if m else "no matches" if text.startswith("No passages") else None
+        # the person's words (DESIGN.md, "Knowledge words"), not the model's: chunks and connections
+        return f"{m.group(1)} chunk{'' if m.group(1) == '1' else 's'}" if m else "no matches" if text.startswith("No passages") else None
     if name == "explore_graph":
         m = re.search(r"\): (\d+) links?\b", text.split("\n", 1)[0])
-        return f"{m.group(1)} link{'' if m.group(1) == '1' else 's'}" if m else "no match" if text.startswith("Nothing in the graph") else None
+        return (f"{m.group(1)} connection{'' if m.group(1) == '1' else 's'}" if m
+                else "no match" if text.startswith("Nothing in the graph") else None)
     if name in ("glob", "grep"):
         if text.startswith("No "):
             return "no matches"

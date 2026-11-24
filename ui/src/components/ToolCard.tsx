@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore, type Item } from "../store";
 import type { ToolItem } from "../lib/group";
 import { diffRows, diffStats } from "../lib/diff";
@@ -8,8 +8,10 @@ import { Spinner } from "./Spinner";
 import { DiffRows } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { splitPath } from "./PathLabel";
-import { Sources } from "./Sources";
+import { RetrievalCard } from "./RetrievalCard";
 import { GraphCard } from "./GraphCard";
+import { LookupTrace } from "./LookupTrace";
+import { LOOKUP_TOOLS, lookupTitle } from "../lib/lookups";
 
 const LIMIT = 4000;
 const MCP_MARK = "[output from MCP server";
@@ -47,6 +49,16 @@ export function ToolCard({ item }: { item: ToolItem }) {
   const [showInput, setShowInput] = useState(false);
   const [copied, setCopied] = useState(false);
   const patch = useStore((s) => s.patch);
+  const reveal = useStore((s) => s.revealTool === item.id);
+  const head = useRef<HTMLButtonElement>(null);
+  useEffect(() => { // "Show in chat" from the Knowledge tab: open this row, bring it into view, give it focus (no animation)
+    if (!reveal) return;
+    setOpen(true);
+    head.current?.scrollIntoView?.({ block: "center" });
+    head.current?.focus({ preventScroll: true });
+    patch({ revealTool: null });
+  }, [reveal, patch]);
+  const lookup = LOOKUP_TOOLS.has(item.name);
   const waiting = useStore((s) => (s.permission ? waitingId(s.items, s.permission.toolId) : null)) === item.id;
   const path = typeof item.input.path === "string" ? item.input.path : null;
   const editsFile = (item.name === "write_file" || item.name === "edit_file") && path;
@@ -88,7 +100,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
 
   return (
     <div className={`tool ${item.isError ? "error" : ""} ${item.denied ? "denied" : ""} ${waiting ? "waiting" : ""} ${open ? "open" : ""} ${item.status}`}>
-      <button className="tool-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+      <button ref={head} className="tool-head" onClick={() => setOpen(!open)} aria-expanded={open} data-tool-id={item.id}>
         <span className="tool-state">
           {waiting ? <span className="wait-dot" role="img" aria-label="waiting for you" />
             : item.status === "running" ? <Spinner label="running" />
@@ -96,7 +108,8 @@ export function ToolCard({ item }: { item: ToolItem }) {
             : <span className="st ok" role="img" aria-label="done">✓</span>}
         </span>
         <ToolIcon name={item.name} />
-        <ToolDisplay display={item.display} name={item.name} path={path} />
+        {lookup ? <span className="tool-display" title={item.display}><span className="td-main td-plain">{lookupTitle(item)}</span></span>
+          : <ToolDisplay display={item.display} name={item.name} path={path} />}
         <span className="tool-right">{outcome}</span>
         <Icon name={open ? "chevron-down" : "chevron-right"} size={12} className="chev" />
       </button>
@@ -111,8 +124,12 @@ export function ToolCard({ item }: { item: ToolItem }) {
               <DiffRows rows={rows} wrap headers={false} />
             </div>
           )}
-          {/* search_docs: the ranked passages instead of the text written for the model (Copy output still copies that) */}
-          {item.sources?.length ? <Sources sources={item.sources} />
+          {/* search_docs and explore_graph: how the lookup went, step by step, then what it found instead of the text written for the
+              model (Copy output still copies that) */}
+          {lookup && item.status === "done" && !item.isError && !item.sources?.length && (
+            <LookupTrace search={item.search} graph={item.graph} asked={typeof item.input.name === "string" ? item.input.name : undefined} id={item.id} />
+          )}
+          {item.sources?.length ? <RetrievalCard sources={item.sources} trace={item.search} id={item.id} />
             : item.graph ? <GraphCard graph={item.graph} inTool onPick={(name) => patch({ rightTab: "knowledge", rightOpen: true, knowledgeQuery: name })} />
             : item.result !== null && (
             <>

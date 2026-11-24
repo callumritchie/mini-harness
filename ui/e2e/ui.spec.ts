@@ -18,6 +18,13 @@ test("the whole demo walk-through", async ({ page }) => {
   expect(page.url()).not.toContain("token="); // the token is removed from the address bar
   await page.screenshot({ path: shot("01-empty") });
 
+  // a new folder: nothing is indexed until the person says what the agent may search
+  const firstOpen = page.getByRole("region", { name: "Let the agent search this folder?" });
+  await expect(firstOpen).toContainText(/text file/);
+  await page.screenshot({ path: shot("02-first-open") });
+  await firstOpen.getByRole("button", { name: "Search everything" }).click();
+  await expect(firstOpen).toBeHidden();
+
   // a starter fills the message box without sending anything; the settings popover shows the model
   await page.getByRole("button", { name: /Explore this project/ }).click();
   await expect(page.getByPlaceholder(/Message Mini Harness/)).toHaveValue(/Look around this project/);
@@ -149,36 +156,45 @@ test("the whole demo walk-through", async ({ page }) => {
   await idle();
   await page.screenshot({ path: shot("11-tool-group") });
 
-  // the project's index: ranked passages that open at their lines, the knowledge graph, and the Knowledge tab
+  // the project's index: what a search brought back and where it sits, why those, the map, and the Knowledge tab
   await say("search");
   await idle();
-  const searchRow = page.locator(".tool", { hasText: "search_docs(" }).last();
-  await expect(searchRow.locator(".tool-right")).toContainText("passage");
+  const searchRow = page.locator(".tool", { hasText: "Searched your files" }).last();
+  await expect(searchRow.locator(".tool-right")).toContainText("chunk");
   await searchRow.locator(".tool-head").click();
-  await searchRow.locator(".source-where").first().click();
+  await expect(searchRow.locator(".file-bar span").first()).toBeVisible();
+  await searchRow.getByRole("button", { name: "How found" }).click();
+  await expect(searchRow.locator(".rc-rank").first()).toContainText(/keyword/);
+  await searchRow.getByRole("button", { name: "Why these?" }).click();
+  await expect(searchRow.locator(".why-col")).toHaveCount(2);
+  await page.screenshot({ path: shot("21-search-retrieval") });
+  await searchRow.locator(".rc-where").first().click();
   await expect(page.locator(".viewer .row.marked").first()).toBeVisible();
-  await page.screenshot({ path: shot("21-search-sources") });
+  await expect(page.locator(".viewer .cg-s.on").first()).toBeVisible(); // the gutter shows how the file is cut
+  await page.locator(".viewer .ci-link").click();
+  await expect(page.locator(".chunk-info")).toContainText(/chunk/);
   await say("graph");
   await idle();
-  const graphRow = page.locator(".tool", { hasText: "explore_graph(" }).last();
+  const graphRow = page.locator(".tool", { hasText: "Followed the map from" }).last();
   await graphRow.locator(".tool-head").click();
   await expect(graphRow.locator(".graph-name")).toHaveText("Demo folder");
-  await expect(graphRow.locator(".graph-svg")).toBeVisible();
   await page.screenshot({ path: shot("22-graph-card") });
+  await expect(page.locator(".turn-lookups").last()).toContainText("Read");
   await page.getByRole("tab", { name: "Knowledge" }).click();
-  await expect(page.locator(".k-stats")).toContainText("files");
-  await page.getByRole("button", { name: "Build prose graph…" }).click();
-  const estimate = page.getByRole("dialog", { name: "Build the prose graph?" });
+  await expect(page.locator(".lanes .lane")).toHaveCount(4);
+  await page.getByRole("button", { name: /Details:/ }).click();
+  await page.getByRole("button", { name: "See what it would cost…" }).click();
+  const estimate = page.getByRole("dialog", { name: "Add concepts from docs?" });
   await expect(estimate).toContainText("claude-haiku-5-5 would read");
   await page.screenshot({ path: shot("23-knowledge-estimate") });
-  await estimate.getByRole("button", { name: "Build" }).click();
-  await expect(page.locator(".notice", { hasText: "Graph built:" })).toBeVisible();
+  await estimate.getByRole("button", { name: /^Read \d+ and add$/ }).click();
+  await expect(page.locator(".notice", { hasText: "Concepts added:" })).toBeVisible();
   await idle();
-  await page.getByLabel("Thing to look up").fill("Demo mode");
+  await page.locator("summary", { hasText: "Search yourself" }).click();
+  await page.getByRole("tab", { name: "Find connections" }).click();
+  await page.getByLabel("Name to look up").fill("Demo mode");
   await page.getByRole("button", { name: "Look up", exact: true }).click();
-  await expect(page.locator(".knowledge .graph-name")).toHaveText("Demo mode");
-  await expect(page.locator(".knowledge .graph-group h4")).toContainText("works_in");
-  await expect(page.locator(".knowledge .graph-link")).toContainText("Demo folder");
+  await expect(page.locator(".knowledge .graph-name").last()).toHaveText("Demo mode");
   await page.screenshot({ path: shot("24-knowledge-lookup") });
 
   // a modified file: the row counts this call's own change, and the diff shows the removal with the changed words marked

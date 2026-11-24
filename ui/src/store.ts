@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import type { Approval, AttachmentRef, ClientRequest, CostSummary, GraphEstimate, GraphResult, Info, Mode, ServerEvent, SessionRow, Source, TranscriptItem,
-  Uploaded, Usage } from "./protocol";
+import type { Approval, AttachmentRef, ClientRequest, CostSummary, GraphEstimate, GraphResult, IndexStatus, Info, Mode, SearchTrace, ServerEvent, SessionRow, Source,
+  TranscriptItem, Uploaded, Usage } from "./protocol";
 import type { RoundLine } from "./lib/goal";
 import type { Socket } from "./socket";
 
@@ -62,6 +62,7 @@ export type Item =
       steps?: string[]; // what a subagent did, step by step
       sources?: Source[]; // search_docs: the passages it found, best first
       graph?: GraphResult; // explore_graph: the neighbourhood it found
+      search?: SearchTrace; // search_docs: how the search went
       change?: { before: string | null; after: string | null }; // what this call did to its file (the Changes tab shows the whole session)
       finish?: { calls: number; cost: number | null };
     }
@@ -125,6 +126,20 @@ export interface ChatState {
   goalLive: GoalLive | null; // the running goal's steps, from the server's goal events
   graphEstimate: GraphEstimate | null; // what a model-read graph build would cost, waiting for the person's yes
   knowledgeQuery: string | null; // a thing to look up in the Knowledge tab (a node clicked in a graph card)
+  /** A search to run in the Knowledge tab ("Search in this file" in the file viewer). */
+  knowledgeSearch: { query: string; pathPrefix: string | null } | null;
+  /** The agent's lookup (a search_docs or explore_graph call id) the Knowledge tab shows step by step. */
+  knowledgeLookup: string | null;
+  /** A tool row to bring into view in the chat ("Show in chat"), once. */
+  revealTool: string | null;
+  /** The index's status: from info, then live from index_status events while the page watches it. */
+  indexStatus: IndexStatus | null;
+  /** Which files the Files tab lists: all, only those the agent can search, or only those it can't. */
+  filesShow: "all" | "in" | "out";
+  /** A search result in the chat shows where each chunk sits in its file, or how each ranking placed it. */
+  retrievalView: "where" | "how";
+  /** The Files tab is choosing what the agent may search (ticks on folders and files), from the first-open question or later. */
+  filesChoose: boolean;
 }
 
 const WRAP_KEY = "mini-harness-wrap";
@@ -168,6 +183,13 @@ export const initialState: ChatState = {
   goalLive: null,
   graphEstimate: null,
   knowledgeQuery: null,
+  knowledgeSearch: null,
+  knowledgeLookup: null,
+  revealTool: null,
+  indexStatus: null,
+  filesShow: "all",
+  retrievalView: "where",
+  filesChoose: false,
 };
 
 /** One line describing a tool call, like the terminal's activity line. */
@@ -208,6 +230,7 @@ export function fromTranscript(items: TranscriptItem[]): Item[] {
           outcome: t.outcome ?? null,
           ...(t.sources?.length ? { sources: t.sources } : {}),
           ...(t.graph ? { graph: t.graph } : {}),
+          ...(t.search ? { search: t.search } : {}),
         };
     }
   });
@@ -241,9 +264,11 @@ export function goalLine(ev: GoalEvent): RoundLine {
 export function reduce(s: ChatState, ev: ServerEvent): ChatState {
   switch (ev.type) {
     case "hello":
-      return { ...s, connected: true, demo: ev.demo, info: ev.info, running: ev.running, totalCost: ev.info.cost };
+      return { ...s, connected: true, demo: ev.demo, info: ev.info, running: ev.running, totalCost: ev.info.cost, indexStatus: ev.info.index ?? s.indexStatus };
     case "info":
-      return { ...s, info: ev.info, totalCost: ev.info.cost };
+      return { ...s, info: ev.info, totalCost: ev.info.cost, indexStatus: ev.info.index ?? s.indexStatus };
+    case "index_status":
+      return { ...s, indexStatus: ev.status };
     case "status":
       return { ...s, running: ev.running };
     case "text_delta":
@@ -275,7 +300,7 @@ export function reduce(s: ChatState, ev: ServerEvent): ChatState {
       const exact = ev.approval !== undefined;
       const denied = exact ? (ev.approval && !ev.approval.allowed ? ev.approval.by : null) : ev.is_error ? s.denial : null;
       const extra = { approval: ev.approval ?? null, outcome: ev.outcome ?? null, mcp: ev.mcp ?? false, ...(ev.sources?.length ? { sources: ev.sources } : {}),
-        ...(ev.graph ? { graph: ev.graph } : {}) };
+        ...(ev.graph ? { graph: ev.graph } : {}), ...(ev.search ? { search: ev.search } : {}) };
       return {
         ...s,
         denial: exact || ev.is_error ? null : s.denial,
@@ -423,6 +448,10 @@ interface Actions {
   resume(id: string): void;
   compact(focus?: string): void;
   reindex(rebuild: boolean, embed?: boolean): void;
+  /** Ask the server for index_status events (on every connect): the status stays live without polling. Quiet if not connected. */
+  watchIndex(): void;
+  /** Save what the agent may search (the first-open answer, or a change made in Files). */
+  chooseSearch(choice: { off?: boolean; excluded?: string[]; included?: string[] }): void;
   estimateGraph(proseOnly?: boolean): void;
   buildGraph(): void;
   goal(text: string, verify?: string, maxTurns?: number): void;
@@ -550,6 +579,8 @@ export const useStore = create<ChatState & Actions>((set, get) => {
     resume: (id) => void request({ type: "resume", ref: id }),
     compact: (focus) => void request({ type: "compact", focus }),
     reindex: (rebuild, embed) => void request({ type: "index", rebuild, embed: embed ?? false }),
+    watchIndex: () => void socket?.send({ type: "watch_index", on: true }),
+    chooseSearch: (choice) => void request({ type: "choose_search", ...choice }),
     estimateGraph: (proseOnly = true) => void request({ type: "graph_estimate", prose_only: proseOnly }),
     buildGraph() {
       const e = get().graphEstimate;

@@ -141,7 +141,23 @@ WORST_PROMPT = ("worst case: migrate every customer record under src/integration
 WORST_DIR = "src/integrations/northwind-industries-holdings/customer-records/2026-Q3/eu-west/Aleksandra-Wiśniewska-Kowalczyk"
 WORST_CJK = "docs/Ünïcödé プロジェクト"
 WORST_CMD = (f'mkdir -p "{WORST_DIR}" "{WORST_CJK}" && for i in $(seq -w 1 1200); do touch "{WORST_DIR}/customer-record-$i.json"; done'
-             f' && touch "{WORST_CJK}/会議メモ 2026-11-24 (final) v12 🚀.md" .env.production.local a')
+             f' && touch "{WORST_CJK}/会議メモ 2026-11-24 (final) v12 🚀.md" .env.production.local a'
+             # one file for every reason the index leaves a file out, and one it can search but not map (Knowledge worst case)
+             ' && mkdir -p dist assets vendor exports legacy web/src'
+             ' && echo "console.log(1)" > dist/bundle.js && printf "\\211PNG\\0\\0" > assets/logo.png'
+             ' && head -c 6000 /dev/zero | tr "\\0" x > vendor/jquery.min.js && head -c 2100000 /dev/zero | tr "\\0" "a" > exports/all-customers.csv'
+             ' && printf "caf\\351\\n" > legacy/latin1-notes.txt'
+             ' && echo "export const CustomerRecordMigrationDashboard = () => null" > web/src/CustomerRecordMigrationDashboardContainer.tsx')
+# A module whose one function calls 70 others, so a 3-step lookup reaches far more names than are shown (Knowledge worst case)
+WORST_PY = "src/integrations/northwind_industries_holdings/migration/customer_record_migration_pipeline_orchestrator.py"
+WORST_STEPS = [f"normalise_legacy_customer_record_field_{name}" for name in
+               ("identifier", "display_name", "email_address", "company_legal_name", "seat_count", "monthly_recurring_revenue_cents",
+                "tags", "notes", "billing_country", "vat_number", "sso_domain", "support_tier", "contract_term", "renewal_date")] + \
+              [f"validate_against_2027_schema_rule_{i:02d}" for i in range(1, 57)]
+WORST_PY_BODY = ('"""Moves every customer record to the 2027 schema, one step at a time."""\n\n\n'
+                 + "".join(f"def {s}(record):\n    return record\n\n\n" for s in WORST_STEPS)
+                 + "def run_customer_record_migration_pipeline(record):\n"
+                 + "".join(f"    record = {s}(record)\n" for s in WORST_STEPS) + "    return record\n")
 WORST_FILE = f"{WORST_DIR}/bartholomew.fitzgerald@northwind-industries-holdings.example.com.config.json"
 WORST_BODY = ('{"id":"cus_01JD4Z8XQ7M3N5P9R2T6V8W0YB","name":"Bartholomew Fitzgerald","email":"bartholomew.fitzgerald@northwind-industries-holdings.example.com",'
               '"company":"Northwind Industries Holdings (EMEA) GmbH & Co. KG","seats":1284,"mrr_cents":129999900,"tags":["enterprise","eu-west","sso",'
@@ -219,10 +235,15 @@ def _worst(messages):
                 _text("I'll create the folders and records first."),
                 _tool("bash", command=WORST_CMD),
                 _tool("write_file", path=WORST_FILE, content=WORST_BODY),
+                _tool("write_file", path=WORST_PY, content=WORST_PY_BODY),
                 _tool("edit_file", path=f"{WORST_DIR}/README.md", old_string="2026 schema", new_string="2027 schema"),
                 _tool("glob", pattern="src/**/*.json")], "tool_use"
     if rounds == 1:
         return [_text("Now I'll ask four helpers to check the records."), *[_tool("subagent", task=t) for t in WORST_HELPERS]], "tool_use"
+    if rounds == 2:
+        return [_text("I'll check what depends on the pipeline before I call it done."),
+                _tool("search_docs", query="customer record migration 2027 schema"),
+                _tool("explore_graph", name="run_customer_record_migration_pipeline", depth=3)], "tool_use"
     return [_text(WORST_REPLY)], "end_turn"
 
 

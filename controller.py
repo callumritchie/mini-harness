@@ -3,6 +3,7 @@
 A front end supplies a `UI` (how to show things and how to ask the person); the Controller holds the session, model, permissions
 and settings, and has one method per action. The terminal's slash commands and the web UI's buttons call the same methods.
 """
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,29 +86,61 @@ class Controller:
         self._bind(self.session)
         if getattr(self.args, "plan", False):
             self.set_plan(True)
-        self._index_in_background()
+        rag.AUTO = False  # interactive: a folder is indexed only once the person has chosen what to search (choose_search)
+        self._index_in_background("start")
         return self.info()
 
-    def _index_in_background(self):
-        """Bring the document index, its structure graph and (if the model is already downloaded) its vectors up to date without
-        holding anything up. Runs at start and after every task; a job already running is not started twice. --no-index skips it
-        (the tools still update the index themselves when they are used)."""
-        if not rag.available() or getattr(self.args, "no_index", False) or not self.index_job.acquire(blocking=False):
+    def _may_download(self):
+        """Search by meaning is always on: its model is downloaded in the background the first time, unless this is the demo or
+        MINI_HARNESS_EMBED_DOWNLOAD=0 (tests, offline machines). Until it is here, searches use keywords alone."""
+        return not getattr(self.args, "demo", False) and os.environ.get("MINI_HARNESS_EMBED_DOWNLOAD", "1") != "0"
+
+    def _index_in_background(self, trigger="after task"):
+        """Bring the document index, its structure graph and its vectors up to date without holding anything up. Runs at start and
+        after every task, once the person has chosen what to search (an empty folder needs no choice: everything, as files come);
+        a job already running is not started twice. --no-index skips it (the tools still update the index when they are used)."""
+        if not rag.available() or getattr(self.args, "no_index", False):
+            return
+        try:
+            index = rag.get(Path.cwd())
+            if index.selection() is None and index.plan(limit=50)["empty"]:
+                index.choose()
+            if not index.allowed():
+                return
+        except Exception as e:  # noqa: BLE001
+            self.ui.notice(f"The document index could not be read: {e}")
+            return
+        if not self.index_job.acquire(blocking=False):
             return
 
         def go():
             try:
-                index = rag.get(Path.cwd())
-                index.sync()
+                index.sync(trigger=trigger)
                 graph.build_structure(index)
-                embedder = embed.get()  # never downloads: that waits for /index --embed
+                embedder = embed.get(allow_download=self._may_download() and embed.available())
                 if embedder is not None:
-                    index.embed_pending(embedder)
+                    s = index.embed_pending(embedder)
+                    if s and s["embedded"] and index.recent:
+                        index.recent[-1]["embedded"] = s["embedded"]
             except Exception as e:  # noqa: BLE001 - search_docs tries again on its own; the person should still know
                 self.ui.notice(f"The document index could not be updated: {e}")
             finally:
                 self.index_job.release()
         threading.Thread(target=go, daemon=True).start()
+
+    def index_plan(self):
+        """What searching this folder would take, for the first-open question (Index.plan)."""
+        return self._index().plan()
+
+    def choose_search(self, off=False, excluded=(), included=(), gitignore=True):
+        """Save what the person chose to search and, unless it was "not now", index it in the background. Returns a line to show."""
+        index = self._index()
+        sel = index.choose(off, excluded, included, gitignore)
+        if sel["off"]:
+            return "Search is off for this folder. The agent will use grep and read files directly. Turn it on from the Knowledge tab or /index."
+        self._index_in_background("first choice" if not index.recent else "choice changed")
+        left = len(sel["excluded"])
+        return "Indexing this folder for search" + (f", leaving out {left} folder(s) or file(s) you unticked" if left else "") + "."
 
     @property
     def limit(self):
@@ -165,7 +198,9 @@ class Controller:
         self.ui.change(path, before, after)
         if rag.available():
             try:
-                rag.get(Path.cwd()).update_paths([path])
+                index = rag.get(Path.cwd())
+                if index.allowed():
+                    index.update_paths([path])
             except Exception:  # noqa: BLE001 - the index is a convenience; it must never break a write
                 pass
 
@@ -190,7 +225,7 @@ class Controller:
         finally:
             self.ui.status(False)
             self.lock.release()
-            self._index_in_background()  # the task may have changed files: catch the graph and vectors up
+            self._index_in_background("after task")  # the task may have changed files: catch the graph and vectors up
 
     def send(self, text, files=()):
         """Run one task. `files` are attachments.Attachment objects; they go to the model before the text."""
@@ -302,10 +337,12 @@ class Controller:
         """/index: bring the document index and its structure graph up to date now (rebuild: from nothing). With embed_now, also
         embed every passage for search by meaning, downloading the local model first if it is not here yet. Returns text."""
         index = self._index()
-        lines = [rag.describe(index.sync(rebuild=rebuild))]
+        if not index.allowed():  # asking for /index is the choice: everything (the .gitignore still counts)
+            index.choose()
+        lines = [rag.describe(index.sync(rebuild=rebuild, trigger="you asked"))]
         g = graph.build_structure(index)
         counts = index.counts()
-        lines.append(f"Graph: {counts['entities']:,} things and {counts['edges']:,} links ({g['parsed']} file(s) read, {g['cached']} from cache).")
+        lines.append(f"Map: {counts['entities']:,} names and {counts['edges']:,} connections ({g['parsed']} file(s) read, {g['cached']} from cache).")
         if embed_now and not embed.available():
             raise UserError("\n".join(lines + [f"Search by meaning needs the local embedding model: {embed.install_command()} (it brings "
                                                f"fastembed and numpy), restart, then /index --embed again. The model ({embed.MODEL_SIZE_NOTE}) is "
@@ -316,7 +353,7 @@ class Controller:
             if s is None:
                 lines.append("Embedding is already running in the background.")
             else:
-                lines.append(f"Meaning: {index.embedded(embedder):,} of {counts['chunks']:,} passages embedded with {embedder.model_id}"
+                lines.append(f"Meaning: {index.embedded(embedder):,} of {counts['chunks']:,} chunks embedded with {embedder.model_id}"
                              f" ({s['embedded']} new{', stopped' if s['stopped'] else ''}).")
         elif embed.available():
             lines.append(f"Search by meaning is off: /index --embed downloads the local model ({embed.MODEL_SIZE_NOTE}) and turns it on.")
@@ -349,9 +386,9 @@ class Controller:
                 raise KeyboardInterrupt
             counts = index.counts()
             spent = self.session.totals["cost_usd"] - before
-            text = (f"Graph built: {s['read']} passage(s) read by {model} ({pricing.money(spent)}), {s['cached']} from earlier reads"
+            text = (f"Concepts added: {s['read']} chunk(s) read by {model} ({pricing.money(spent)}), {s['cached']} from earlier reads"
                     + (f", {s['invalid']} unusable answer(s) skipped" if s["invalid"] else "")
-                    + f". The graph has {counts['entities']:,} things and {counts['edges']:,} links.")
+                    + f". The map has {counts['entities']:,} names and {counts['edges']:,} connections.")
             self.ui.notice(text)
             return TaskResult(text=text)
         return self._guard(go)

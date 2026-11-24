@@ -72,6 +72,7 @@ export default function App() {
       (ev: ServerEvent) => {
         batch.push(ev);
         if (ev.type === "hello") {
+          useStore.getState().watchIndex(); // every connect: a reconnect starts a fresh subscription
           // a fresh page: draw the conversation so far from the server
           if (firstHello && useStore.getState().items.length === 0) {
             api<{ items: TranscriptItem[] }>(`session/${ev.info.session_id}`)

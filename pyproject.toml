@@ -9,16 +9,16 @@ description = "A small coding agent for Claude and DeepSeek, with a terminal mod
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-dependencies = ["anthropic>=0.79"]
+dependencies = ["anthropic>=0.79", "fastembed>=0.5", "numpy>=1.24"]  # fastembed: search by meaning, always on (its model downloads on first start)
 
 [project.optional-dependencies]
 ui = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
 dev = ["httpx>=0.27", "fastapi>=0.110", "uvicorn[standard]>=0.29", "numpy>=1.24"]
-rag = ["fastembed>=0.5", "numpy>=1.24"]  # the local embedding model for search by meaning (downloaded only on /index --embed)
+rag = []  # kept so `pip install mini-harness[rag]` still works; search by meaning is part of the base install now
 
 [project.scripts]
 mini-harness = "agent:main"
 
 [tool.setuptools]
-py-modules = ["agent", "attachments", "compaction", "context", "controller", "demo", "embed", "goal", "graph", "judge", "mcp", "permissions",
+py-modules = ["agent", "attachments", "compaction", "context", "controller", "demo", "embed", "goal", "graph", "ignore", "judge", "mcp", "permissions",
               "pricing", "rag", "safety", "session", "sessionlog", "skills", "terminal", "tools", "webserver"]

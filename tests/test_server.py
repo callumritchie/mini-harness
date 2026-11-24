@@ -1,4 +1,6 @@
 """Tests for the web UI server, with the scripted demo model (no API key needed): python3 tests/test_server.py"""
+import os
+os.environ.setdefault("MINI_HARNESS_EMBED_DOWNLOAD", "0")  # tests never download the embedding model
 import faulthandler
 import os
 import sys
@@ -99,20 +101,35 @@ with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
     assert (project / "demo.py").exists()
     changes = client.get("/api/changes", headers=H).json(); assert changes[0]["path"] == "demo.py" and changes[0]["before"] is None and "def greet" in changes[0]["after"]
 
+    # nothing is indexed before the person chooses: the plan says what would be, a search before that tells the agent to use grep
+    assert ev[-1]["info"]["index"]["selection"] is None and ev[-1]["info"]["index"]["allowed"] is False
+    plan = client.get("/api/index/plan", headers=H).json()
+    assert plan["files"] >= 1 and plan["chosen"] is None and not plan["empty"] and any(f["path"] == "" for f in plan["folders"])
+    assert client.get("/api/search?q=greet", headers=H).status_code == 409
+    ws.send_json({"type": "choose_search", "excluded": ["nothing-here"]})
+    ev = collect(ws, "info")
+    assert not any(e["type"] == "notice" for e in ev)  # the chat stays as it was (on a first open: the welcome and its starters)
+    assert ev[-1]["info"]["index"]["allowed"] is True and ev[-1]["info"]["index"]["selection"]["excluded"] == ["nothing-here"]
+
     # a search gives the browser structured sources (the file just written is already in the index); a reload keeps them
     ws.send_json({"type": "send", "text": "search"})
     ev = collect(ws, "done"); t = types(ev)
     res = next(e for e in ev if e["type"] == "tool_result")
-    assert res["name"] == "search_docs" and not res["is_error"] and res["outcome"].endswith(("passage", "passages")), res
+    assert res["name"] == "search_docs" and not res["is_error"] and res["outcome"].endswith(("chunk", "chunks")), res
+    cut = client.get("/api/index/chunks?path=demo.py", headers=H).json()
+    assert cut["path"] == "demo.py" and cut["kind"] == "code" and cut["size"] == 60 and cut["chunks"][0]["start"] == 1 and cut["lines"] >= 1
+    assert client.get("/api/index/chunks?path=../x", headers=H).status_code == 403
     src = res["sources"][0]; assert src["path"] == "demo.py" and src["start_line"] == 1 and "def greet" in src["snippet"] and src["score"] >= 0
     assert all(s["path"] != ".env" for s in res["sources"]) and "sk-live" not in str(res)
     items = client.get(f"/api/session/{ctl.session.id}", headers=H).json()["items"]
     assert next(i for i in items if i["kind"] == "tool" and i["id"] == res["id"])["sources"] == res["sources"]
-    assert all("sources" not in b for m in ctl.session.messages if isinstance(m["content"], list) for b in m["content"] if isinstance(b, dict))
+    tr = res["search"]; assert tr["query"] == "demo folder throwaway" and tr["used"] == "keyword" and tr["searched"] >= 1 and tr["shown"] == len(res["sources"])
+    assert next(i for i in items if i["kind"] == "tool" and i["id"] == res["id"])["search"] == tr  # the trace survives a reload
+    assert all("search" not in b and "sources" not in b for m in ctl.session.messages if isinstance(m["content"], list) for b in m["content"] if isinstance(b, dict))
     ws.send_json({"type": "index", "rebuild": True})
     ev = collect(ws, "info")
     notice = next(e for e in ev if e["type"] == "notice")
-    assert notice["text"].startswith("Index updated:") and "Graph:" in notice["text"] and ev[-1]["info"]["index"]["files"] >= 2
+    assert notice["text"].startswith("Index updated:") and "Map:" in notice["text"] and ev[-1]["info"]["index"]["files"] >= 2
 
     # the graph: a demo lookup gives the browser the neighbourhood, the REST lookup is the same, and a reload keeps it
     (project / "notes.md").write_text("# Demo folder\n\nThe `greet` function says hello.\n")  # the demo looks up this heading
@@ -120,7 +137,7 @@ with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
     ws.send_json({"type": "send", "text": "graph"})
     ev = collect(ws, "done")
     res = next(e for e in ev if e["type"] == "tool_result")
-    assert res["name"] == "explore_graph" and not res["is_error"] and res["outcome"] == "2 links", res
+    assert res["name"] == "explore_graph" and not res["is_error"] and res["outcome"] == "2 connections", res
     assert res["graph"]["center"]["name"] == "Demo folder" and {e["relation"] for e in res["graph"]["edges"]} == {"contains", "mentions"}
     g = client.get("/api/graph", params={"name": "greet"}, headers=H).json()["graph"]
     assert g["center"]["name"] == "demo.greet" and any(e["relation"] == "mentions" and e["path"] == "notes.md" for e in g["edges"])
@@ -128,6 +145,26 @@ with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
     assert client.get("/api/graph", params={"name": "x", "depth": 9}, headers=H).status_code == 422
     assert client.get("/api/graph", params={"name": "greet"}).status_code == 401
     st = client.get("/api/index", headers=H).json(); assert st["available"] and st["entities"] > 0 and "embed_installed" in st
+    assert st["last_sync"] and st["skipped"].get("secret") == 1 and "location" in st and st["capped"] is False
+
+    # the person can search like the agent, look up names as they type, and see how the index sees each file
+    s = client.get("/api/search", params={"q": "greet"}, headers=H).json()
+    assert s["sources"][0]["path"] == "demo.py" and s["mode"] == "keyword" and s["asked"] == "hybrid"
+    assert all(h["path"] != ".env" for h in client.get("/api/search", params={"q": "API_KEY sk"}, headers=H).json()["sources"])
+    assert client.get("/api/search", params={"q": "greet", "path_prefix": "sub"}, headers=H).json()["sources"] == []
+    assert client.get("/api/search", params={"q": "x", "path_prefix": "../"}, headers=H).status_code == 403
+    assert client.get("/api/search", params={"q": "x", "mode": "psychic"}, headers=H).status_code == 422
+    assert client.get("/api/search", params={"q": "x"}).status_code == 401
+    assert any(n["name"] == "demo.greet" for n in client.get("/api/graph/names", params={"q": "gre"}, headers=H).json()["names"])
+    f = client.get("/api/index/file", params={"path": "demo.py"}, headers=H).json()
+    assert f["state"] == "in" and f["snippets"] >= 1 and f["entity"] == "demo"
+    assert client.get("/api/index/file", params={"path": ".env"}, headers=H).json() == {"path": ".env", "state": "secret"}
+    assert client.get("/api/index/file", params={"path": "../x"}, headers=H).status_code == 403
+    tree = {n["path"]: n for n in client.get("/api/files", headers=H).json()["tree"]}
+    assert tree["demo.py"]["idx"] == "in" and tree[".env"]["idx"] == "secret" and "link" not in tree  # links out are not listed
+    ws.send_json({"type": "watch_index", "on": True})
+    st = collect(ws, "index_status")[-1]["status"]; assert st["available"] and st["files"] >= 2
+    ws.send_json({"type": "watch_index", "on": False})
     items = client.get(f"/api/session/{ctl.session.id}", headers=H).json()["items"]
     assert next(i for i in items if i["kind"] == "tool" and i["id"] == res["id"])["graph"] == res["graph"]
 
@@ -138,7 +175,7 @@ with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
     cost0 = ctl.session.totals["cost_usd"]
     ws.send_json({"type": "graph_build"})
     ev = collect(ws, "done")
-    assert any(e["type"] == "notice" and e["text"].startswith("Graph built:") for e in ev) and not ev[-1]["error"], ev[-1]
+    assert any(e["type"] == "notice" and e["text"].startswith("Concepts added:") for e in ev) and not ev[-1]["error"], ev[-1]
     assert ctl.session.totals["cost_usd"] > cost0
     g = client.get("/api/graph", params={"name": "Demo mode"}, headers=H).json()["graph"]
     assert g["center"]["kind"] == "component" and g["edges"][0]["relation"] == "works_in"

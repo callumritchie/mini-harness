@@ -11,6 +11,7 @@ const PATHS: Record<string, ReactNode> = {
   panel: <><rect x="2" y="2.5" width="12" height="11" rx="2" /><path d="M10 2.5v11" /></>,
   pencil: PENCIL,
   search: SEARCH,
+  "no-search": <>{SEARCH}<path d="M2.5 2.5l11 11" /></>,
   goal: <><circle cx="8" cy="8" r="5.5" /><circle cx="8" cy="8" r="2" /></>,
   compact: <path d="M3 4h10M3 8h10M3 12h6" />,
   send: <path d="M8 13V3M4 7l4-4 4 4" />,

@@ -1,6 +1,8 @@
 """Checks on the knowledge graph (graph.py): what the structure extractor finds in Python and Markdown, the extraction cache,
 what happens when files change, exploring, and the opt-in model extractor with a fake client.
 Offline, no API key: python3 tests/test_graph.py   (or: python3 -m pytest tests/test_graph.py)"""
+import os
+os.environ.setdefault("MINI_HARNESS_EMBED_DOWNLOAD", "0")  # tests never download the embedding model
 import json
 import os
 import sys
@@ -187,6 +189,21 @@ def test_explore_finds_by_name_and_follows_both_ways():
     assert graph.explore(index2, "Controller")["center"]["name"] == "controller.Controller"  # the case as typed wins
     assert graph.explore(index2, "controller")["center"]["name"] == "controller"
     assert graph.explore(index, "STORAGE")["center"]["kind"] == "section"  # any case, then by words
+    # how the name was found, and how many names each step reached, for the chat to explain the lookup
+    assert graph.explore(index, "pkg.app.Store")["matched"] == "exact" and out["matched"] == "ends"
+    assert graph.explore(index, "STORAGE")["matched"] == "exact" and graph.explore(index, "app store")["matched"] == "words"
+    assert deeper["by_hop"] == [sum(n["hop"] == h for n in deeper["nodes"]) for h in (1, 2)] and deeper["depth"] == 2
+
+
+def test_suggest_offers_half_typed_names_and_files_have_a_name():
+    root, index = project(SAMPLE)
+    graph.build_structure(index)
+    names = [n["name"] for n in graph.suggest(index, "fet")]
+    assert "pkg.app.Store.fetch" in names, names
+    assert graph.suggest(index, "Store")[0]["name"] == "pkg.app.Store"
+    assert graph.suggest(index, "%") == [] and graph.suggest(index, "_") == []  # LIKE wildcards are plain text
+    assert graph.file_entity(index, "pkg/app.py") == "pkg.app" and graph.file_entity(index, "docs/guide.md") == "docs/guide.md"
+    assert graph.file_entity(index, "notes.txt") is None
 
 
 def test_ensure_builds_on_first_use():

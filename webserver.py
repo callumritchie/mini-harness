@@ -10,6 +10,7 @@ import os
 import secrets
 import tempfile
 import threading
+import time
 import urllib.parse
 import webbrowser
 from pathlib import Path
@@ -33,6 +34,7 @@ MAX_UPLOAD_BYTES = max(attachments.MAX_IMAGE_BYTES, attachments.MAX_PDF_BYTES, a
 MAX_PENDING_UPLOAD_BYTES = 60_000_000  # uploaded files waiting to be sent, in all
 DIST = Path(__file__).resolve().parent / "ui" / "dist"
 HIDDEN_DIRS = {".git"} | tools.SKIP_DIRS
+INDEX_WATCH_IDLE, INDEX_WATCH_BUSY = 2.0, 0.5  # seconds between looks at the index's status (watch_index)
 
 
 # ---------- making things safe to show ----------
@@ -84,6 +86,9 @@ class WebUI(UI):
         self.calls = {}  # call id -> (name, args): what a result needs to describe itself
         self.groups = {}  # call id -> the parallel group it belongs to (the first call's id)
         self.uploads = {}  # attachment id -> attachments.Attachment, uploaded and waiting to be sent with a message
+        self.index_watch = False  # the page asked for index_status events (watch_index)
+        self.index_thread = None
+        self.index_sent = None  # the last status sent, so only changes are sent
 
     def upload(self, item):
         """Keep an uploaded file until a message takes it. Returns its id, or raises UserError when too much is waiting."""
@@ -107,6 +112,38 @@ class WebUI(UI):
     def attach(self, loop, queue):
         with self.lock:
             self.loop, self.queue = loop, queue
+            self.index_sent = None  # a new page has seen nothing yet
+
+    def watch_index(self, on):
+        """While the page asks for it, send `index_status` whenever the index's status changes: background syncs, writes, vectors
+        being made, the graph being built. Polled (it is a few counts) rather than hooked into every place that changes it.
+        Off unless asked, so the event stream of a page (or a test) that does not watch stays as it was."""
+        with self.lock:
+            self.index_watch = on
+            self.index_sent = None
+            start = on and self.index_thread is None
+            if start:
+                self.index_thread = threading.Thread(target=self._watch_loop, daemon=True)
+        if start:
+            self.index_thread.start()
+        if on and self.controller is not None:  # the current status at once, then only changes
+            self.index_sent = self.controller.index_status()
+            self.emit("index_status", status=clean(self.index_sent, 1000))
+
+    def _watch_loop(self):
+        busy = False
+        while True:  # one thread for the server's life; it only looks while a page is watching
+            time.sleep(INDEX_WATCH_BUSY if busy else INDEX_WATCH_IDLE)
+            if not self.index_watch or self.loop is None or self.controller is None:
+                continue
+            try:
+                status = self.controller.index_status()
+            except Exception:  # noqa: BLE001 - rag.status never raises; anything else must not end the watch
+                continue
+            busy = bool(status.get("building") or status.get("embedding") or status.get("graph_building"))
+            if status != self.index_sent:
+                self.index_sent = status
+                self.emit("index_status", status=clean(status, 1000))
 
     def detach(self, queue):
         """Stop sending to this page, unless a newer one has taken over (a refresh opens the new socket before the old one closes)."""
@@ -242,7 +279,38 @@ def project_path(controller, raw):
     return p, None
 
 
-def build_tree(root):
+def index_coverage(root):
+    """What the document index holds, for marking the Files tree; None when there is no index to ask."""
+    if not rag.available():
+        return None
+    try:
+        return rag.get(root).coverage()
+    except Exception:  # noqa: BLE001 - the tree must show even when the index cannot be read
+        return None
+
+
+def index_state(rel, coverage):
+    """How the agent's search sees one file: "in", a rag.SKIP_REASONS key, "capped" (past the file limit) or "pending" (not
+    looked at yet: new since the last update)."""
+    if rel in coverage["files"]:
+        return "in"
+    skipped = coverage["skipped"]
+    if rel in skipped:
+        return skipped[rel]
+    if "" in skipped:  # the whole project (search is off)
+        return skipped[""]
+    parts = rel.split("/")
+    for depth in range(len(parts) - 1, 0, -1):  # a folder left out is recorded once, as "folder/"
+        reason = skipped.get("/".join(parts[:depth]) + "/")
+        if reason:
+            return reason
+    return "capped" if coverage["capped"] else "pending"
+
+
+def build_tree(root, coverage=None, ignored=None):
+    """The project's files and folders. With `coverage`, each file says how the agent's search sees it (idx); with `ignored` (a
+    function of (relative path, is folder)), what .gitignore leaves out is marked gi, so the Files tab can show it before anything
+    is indexed (choosing what to search)."""
     entries = []
 
     def walk(folder, depth):
@@ -258,10 +326,16 @@ def build_tree(root):
                 continue
             entries.append(1)
             rel = str(p.relative_to(root))
+            gi = ignored is not None and ignored(Path(rel).as_posix(), p.is_dir())
             if p.is_dir():
-                out.append({"name": p.name, "path": rel, "type": "dir", "children": walk(p, depth + 1) if depth < 8 else []})
+                node = {"name": p.name, "path": rel, "type": "dir", "children": walk(p, depth + 1) if depth < 8 else []}
             else:
-                out.append({"name": p.name, "path": rel, "type": "file", "secret": safety.is_secret(p), "size": p.stat().st_size})
+                node = {"name": p.name, "path": rel, "type": "file", "secret": safety.is_secret(p), "size": p.stat().st_size}
+                if coverage is not None:
+                    node["idx"] = "secret" if node["secret"] else index_state(Path(rel).as_posix(), coverage)
+            if gi:
+                node["gi"] = True
+            out.append(node)
         return out
 
     return walk(root, 0)
@@ -320,7 +394,14 @@ def create_app(controller, webui, token, port, dev_origins=()):
     @app.get("/api/files")
     def files():
         root = Path.cwd().resolve()
-        return {"root": str(root), "name": root.name, "tree": build_tree(root)}
+        coverage, ignored = index_coverage(root), None
+        if coverage is not None:
+            index = rag.get(root)
+            sel = index.selection()
+            ignored = index.ignore.ignored if (sel or {}).get("gitignore", True) else None
+            if not index.allowed():  # nobody has chosen yet: no marks; "not now": nothing is searched
+                coverage = {"files": {}, "skipped": {"": "not_chosen"}, "capped": False} if sel else None
+        return {"root": str(root), "name": root.name, "tree": build_tree(root, coverage, ignored)}
 
     @app.get("/api/file")
     def file(path: str = Query(...)):
@@ -367,15 +448,85 @@ def create_app(controller, webui, token, port, dev_origins=()):
     def index_status():
         return controller.index_status()
 
+    def searchable_index():
+        """The project's index, if the person has chosen to search it (else 409, with why)."""
+        if not rag.available():
+            raise HTTPException(503, "the index needs SQLite with FTS5")
+        index = rag.get(Path.cwd())
+        if not index.allowed():
+            raise HTTPException(409, "Search is off for this folder: choose what to search first.")
+        return index
+
+    @app.get("/api/index/plan")
+    def index_plan():
+        """What searching this folder would take, by top-level folder, for the first-open question. Names and sizes only."""
+        if not rag.available():
+            raise HTTPException(503, "the index needs SQLite with FTS5")
+        return clean(controller.index_plan(), 1000)
+
+    @app.get("/api/index/chunks")
+    def index_chunks(path: str = Query(..., max_length=1000)):
+        """How one file is cut: its chunks (lines, heading, whether search by meaning can find it, the names on the map it holds)."""
+        p, error = project_path(controller, path)
+        if error:
+            raise HTTPException(403, error)
+        if not rag.available():
+            raise HTTPException(503, "the index needs SQLite with FTS5")
+        import embed
+        rel = p.relative_to(Path.cwd().resolve()).as_posix()
+        return clean(rag.get(Path.cwd()).file_chunks(rel, embed.loaded()), MAX_STRING)
+
     @app.get("/api/graph")
     def graph_view(name: str = Query(..., min_length=1, max_length=200), depth: int = Query(1, ge=1, le=graph.MAX_DEPTH),
                    relation: str = Query(None, max_length=40)):
         """The same lookup as the explore_graph tool, for the Knowledge tab. Read-only; the graph only ever covers the project."""
-        if not rag.available():
-            raise HTTPException(503, "the index needs SQLite with FTS5")
-        index = rag.get(Path.cwd())
+        index = searchable_index()
         graph.ensure(index)
         return {"graph": clean(graph.explore(index, name, depth, relation or None), MAX_STRING)}
+
+    @app.get("/api/graph/names")
+    def graph_names(q: str = Query(..., min_length=1, max_length=200)):
+        """Names in the graph that match what is typed so far, for the lookup box."""
+        return {"names": clean(graph.suggest(searchable_index(), q), 300)}
+
+    @app.get("/api/search")
+    def search(q: str = Query(..., min_length=1, max_length=500), mode: str = Query("hybrid"),
+               path_prefix: str = Query(None, max_length=1000), top_k: int = Query(8, ge=1, le=tools.MAX_SEARCH_RESULTS)):
+        """The agent's search_docs, run by the person: the same ranking, over the same files, with nothing sent anywhere."""
+        searchable_index()
+        if mode not in rag.MODES:
+            raise HTTPException(422, f"mode must be one of {', '.join(rag.MODES)}")
+        prefix = None
+        if path_prefix and path_prefix.strip() not in ("", ".", "./"):
+            p, error = project_path(controller, path_prefix)
+            if error:
+                raise HTTPException(403, error)
+            prefix = p.relative_to(Path.cwd().resolve()).as_posix()
+            prefix = None if prefix == "." else prefix
+        import embed
+        index = rag.get(Path.cwd())
+        trace = {}
+        hits, used = index.query(q, top_k, prefix, mode, embed.loaded(), trace=trace)
+        files = index.counts()["files"]
+        trace.update(query=q, files=files, building=index.building, shown=len(hits))
+        return {"sources": clean(hits, MAX_STRING), "mode": used, "asked": mode, "files": files, "search": clean(trace, 1000)}
+
+    @app.get("/api/index/file")
+    def index_file(path: str = Query(..., max_length=1000)):
+        """How the agent's search sees one file: indexed (snippets, connections, its name on the map) or why it is left out."""
+        p, error = project_path(controller, path)
+        if error and not safety.is_secret(p):
+            raise HTTPException(403, error)
+        rel = p.relative_to(Path.cwd().resolve()).as_posix() if Path.cwd().resolve() in p.parents else path
+        coverage = index_coverage(Path.cwd().resolve())
+        if coverage is None:
+            return {"path": rel, "state": "unavailable"}
+        state = "secret" if safety.is_secret(p) else index_state(rel, coverage)
+        out = {"path": rel, "state": state}
+        if state == "in":
+            out["snippets"], out["connections"] = coverage["files"][rel]
+            out["entity"] = graph.file_entity(rag.get(Path.cwd()), rel)
+        return clean(out, 1000)
 
     # ---------- WebSocket ----------
 
@@ -407,6 +558,13 @@ def create_app(controller, webui, token, port, dev_origins=()):
     def do_index(rebuild, embed_now):
         try:
             webui.emit("notice", text=controller.reindex(rebuild, embed_now))
+        except Exception as e:  # noqa: BLE001
+            webui.emit("error", message=str(e))
+        webui.emit("info", info=controller.info())
+
+    def do_choose(off, excluded, included, gitignore):
+        try:
+            controller.choose_search(off, excluded, included, gitignore)  # no chat notice: the card goes, the top bar shows the indexing
         except Exception as e:  # noqa: BLE001
             webui.emit("error", message=str(e))
         webui.emit("info", info=controller.info())
@@ -485,6 +643,11 @@ def create_app(controller, webui, token, port, dev_origins=()):
             if busy:
                 return webui.emit("error", message="A task is running. Stop it first.")
             run_in_thread(do_compact, msg.get("focus") if isinstance(msg.get("focus"), str) else None)
+        elif kind == "watch_index":
+            webui.watch_index(msg.get("on") is True)
+        elif kind == "choose_search":  # the first-open answer, or a change made later in Files
+            strs = lambda v: [x for x in v if isinstance(x, str)][:2000] if isinstance(v, list) else []  # noqa: E731
+            run_in_thread(do_choose, msg.get("off") is True, strs(msg.get("excluded")), strs(msg.get("included")), msg.get("gitignore") is not False)
         elif kind == "index":  # allowed while a task runs: the index has its own lock, and searches never wait for a sync
             run_in_thread(do_index, msg.get("rebuild") is True, msg.get("embed") is True)
         elif kind in ("graph_estimate", "graph_build"):

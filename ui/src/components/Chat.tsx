@@ -9,7 +9,10 @@ import { Logo } from "./Logo";
 import { Message } from "./Message";
 import { PlanCard } from "./PlanCard";
 import { ToolGroup } from "./ToolGroup";
+import { TurnLookups } from "./TurnLookups";
+import { turnLookups } from "../lib/lookups";
 import { Welcome } from "./Welcome";
+import { FirstOpen } from "./FirstOpen";
 import { permissionTitle } from "../lib/lang";
 
 /** Everything after a person's message sits in one column beside the agent's mark; the mark shows once, at the top of the reply. */
@@ -34,6 +37,7 @@ export function Chat() {
   // goal-progress notices live in the goal card while it runs and in its result card after; the thread keeps the rest
   const entries = useMemo(() => groupItems(items.filter((it) => !spans.hidden.has(it.id))), [items, spans]);
   const compacting = useMemo(() => compactingId(items), [items]);
+  const looked = useMemo(() => turnLookups(items, running), [items, running]); // reply id -> the lookups its turn made
 
   useEffect(() => {
     const el = box.current;
@@ -53,6 +57,7 @@ export function Chat() {
   return (
     <div className="chat" ref={box} onScroll={onScroll} role="log" aria-live="polite">
       <GoalCard />
+      <FirstOpen />
       {items.length === 0 && <Welcome />}
       <div className="thread">
         {entries.map((e, i) =>
@@ -61,6 +66,7 @@ export function Chat() {
           ) : (
             <AgentRow key={e.id} first={isUser(entries[i - 1])}>
               {e.kind === "group" ? <ToolGroup tools={e.tools} /> : <Message item={e} compacting={e.id === compacting} span={spans.byOutcome.get(e.id)} />}
+              {looked.has(e.id) && <TurnLookups tools={looked.get(e.id)!} />}
             </AgentRow>
           ),
         )}
