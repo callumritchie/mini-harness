@@ -149,6 +149,38 @@ test("the whole demo walk-through", async ({ page }) => {
   await idle();
   await page.screenshot({ path: shot("11-tool-group") });
 
+  // the project's index: ranked passages that open at their lines, the knowledge graph, and the Knowledge tab
+  await say("search");
+  await idle();
+  const searchRow = page.locator(".tool", { hasText: "search_docs(" }).last();
+  await expect(searchRow.locator(".tool-right")).toContainText("passage");
+  await searchRow.locator(".tool-head").click();
+  await searchRow.locator(".source-where").first().click();
+  await expect(page.locator(".viewer .row.marked").first()).toBeVisible();
+  await page.screenshot({ path: shot("21-search-sources") });
+  await say("graph");
+  await idle();
+  const graphRow = page.locator(".tool", { hasText: "explore_graph(" }).last();
+  await graphRow.locator(".tool-head").click();
+  await expect(graphRow.locator(".graph-name")).toHaveText("Demo folder");
+  await expect(graphRow.locator(".graph-svg")).toBeVisible();
+  await page.screenshot({ path: shot("22-graph-card") });
+  await page.getByRole("tab", { name: "Knowledge" }).click();
+  await expect(page.locator(".k-stats")).toContainText("files");
+  await page.getByRole("button", { name: "Build prose graph…" }).click();
+  const estimate = page.getByRole("dialog", { name: "Build the prose graph?" });
+  await expect(estimate).toContainText("claude-haiku-5-5 would read");
+  await page.screenshot({ path: shot("23-knowledge-estimate") });
+  await estimate.getByRole("button", { name: "Build" }).click();
+  await expect(page.locator(".notice", { hasText: "Graph built:" })).toBeVisible();
+  await idle();
+  await page.getByLabel("Thing to look up").fill("Demo mode");
+  await page.getByRole("button", { name: "Look up", exact: true }).click();
+  await expect(page.locator(".knowledge .graph-name")).toHaveText("Demo mode");
+  await expect(page.locator(".knowledge .graph-group h4")).toContainText("works_in");
+  await expect(page.locator(".knowledge .graph-link")).toContainText("Demo folder");
+  await page.screenshot({ path: shot("24-knowledge-lookup") });
+
   // a modified file: the row counts this call's own change, and the diff shows the removal with the changed words marked
   await say("edit");
   await idle();

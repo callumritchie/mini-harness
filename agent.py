@@ -375,11 +375,11 @@ def agent_loop(run, session):
             if run.on_call:
                 run.on_call(use.id, use.name, use.input)
 
-        def finish(use, out, is_error):
+        def finish(use, out, is_error, meta=None):
             result = {"type": "tool_result", "tool_use_id": use.id, "content": out, "is_error": is_error}
-            session.log_tool_result(result)  # saved now, not after the whole batch
-            if run.on_result:
-                run.on_result(use.id, use.name, out, is_error)
+            session.log_tool_result(result, meta=meta)  # saved now, not after the whole batch
+            if run.on_result:  # meta (search_docs' sources, explore_graph's graph) goes to front ends only; the model gets the text
+                run.on_result(use.id, use.name, out, is_error, **({"meta": meta} if meta else {}))
             results.append(result)
 
         for group in tool_groups(tool_uses, reply.stop_reason != "max_tokens"):
@@ -394,15 +394,17 @@ def agent_loop(run, session):
             use = group[0]
             check_cancel(run)
             announce(use)
+            meta = None
             if reply.stop_reason == "max_tokens":  # the tool input may be cut off, so do not run it
                 out, is_error = "Your reply hit the token limit, so this call was not run. Try a smaller step.", True
             else:
                 _worker.call_id = use.id  # a subagent started by this call reports its steps against it
                 try:
                     out, is_error = execute(run, session, use)
+                    meta = tools.take_meta()
                 finally:
                     _worker.call_id = None
-            finish(use, out, is_error)
+            finish(use, out, is_error, meta)
         session.add_tool_results(results)
     raise NotFinished(f"Stopped after {MAX_STEPS} model calls in one task without finishing.")
 
@@ -749,6 +751,8 @@ def build_parser():
     ap.add_argument("--pass-env", action="append", default=[], metavar="NAME",
                     help="pass this environment variable to commands and MCP servers even though its name looks like a secret. Repeatable")
     ap.add_argument("--no-web-search", action="store_true", help="do not offer the provider's web search tool")
+    ap.add_argument("--no-index", action="store_true",
+                    help="do not index the folder in the background (search_docs and explore_graph still index it when used)")
     ap.add_argument("--ui", action="store_true", help="start the local web UI and open it in your browser (needs: pip install 'mini-harness[ui]')")
     ap.add_argument("--port", type=int, default=8765, metavar="N", help="with --ui: the port to listen on (default 8765; 127.0.0.1 only)")
     ap.add_argument("--no-open", action="store_true", help="with --ui: do not open a browser; just print the address")

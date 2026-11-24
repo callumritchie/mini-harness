@@ -212,6 +212,8 @@ class Chat:
             "/limit [tokens]      show or set where automatic compaction starts",
             "/plan [on|off]       plan mode: read-only until you approve the agent's plan (no argument: switch)",
             "/attach [PATH|clear] attach an image, PDF or text file to your next message (no argument: list them)",
+            "/index [--rebuild] [--embed]   update the document index and graph now; --embed turns on search by meaning",
+            "/graph [status|build]  the knowledge graph; build has a model read the prose (shows the cost first)",
             "/goal [--verify CMD] [--max-turns N] TEXT   work unattended until done, with evidence, your check and a review",
             "/clear               clear the conversation and start fresh (the old one stays in /sessions)",
             "/help                this list",
@@ -328,6 +330,44 @@ class Chat:
 
     def cmd_compact(self, arg):
         self.ctl.compact(arg)
+
+    def cmd_index(self, arg):
+        words = arg.split()
+        if any(w not in ("--rebuild", "--embed") for w in words):
+            print("Usage: /index [--rebuild] [--embed]. --rebuild starts over; --embed turns on search by meaning (downloads the local model once).")
+            return
+        print(self.ctl.reindex(rebuild="--rebuild" in words, embed_now="--embed" in words))
+
+    def cmd_graph(self, arg):
+        words = shlex.split(arg)
+        if not words or words == ["status"]:
+            s = self.ctl.index_status()
+            if not s.get("available"):
+                print("The index is not available here (this Python's SQLite has no FTS5).")
+                return
+            print(f"Graph: {s.get('entities', 0):,} things and {s.get('edges', 0):,} links from {s.get('files', 0):,} files. "
+                  "/graph build lets a model read the prose and add concepts (it shows the cost first).")
+            return
+        if words[0] != "build":
+            print("Usage: /graph [status] | /graph build [--all] [--model MODEL] [--yes]")
+            return
+        model = words[words.index("--model") + 1] if "--model" in words and words.index("--model") + 1 < len(words) else None
+        est = self.ctl.graph_estimate(prose_only="--all" not in words, model=model)
+        if not est["passages"]:
+            print(f"Nothing new to read ({est['cached']} passage(s) already read).")
+            if est["cached"]:
+                self.report(self.ctl.graph_build(prose_only="--all" not in words, model=model))
+            return
+        print(f"{est['model']} would read {est['passages']:,} passage(s): about {est['input_tokens']:,} tokens in and {est['output_tokens']:,} out, "
+              f"roughly {pricing.money(est['cost'])}. Passages are sent to the provider.")
+        if "--yes" not in words and input("Go ahead? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Not built.")
+            return
+        result = self.ctl.graph_build(prose_only="--all" not in words, model=model)
+        if result.interrupted:
+            print("\n[stopped: what was read so far is kept]")
+        else:
+            self.report(result)
 
     def cmd_goal(self, arg):
         try:

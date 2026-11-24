@@ -21,7 +21,7 @@ MODE_HELP = {
     "allow": "allow everything without asking (including deleting files, secrets and the network)",
 }
 # What may run in plan mode, whatever the permission mode says. bash runs there only when the policy finds it read-only.
-PLAN_TOOLS = {"read_file", "glob", "grep", "ask_user", "subagent", "exit_plan_mode"}
+PLAN_TOOLS = {"read_file", "glob", "grep", "search_docs", "explore_graph", "ask_user", "subagent", "exit_plan_mode"}
 PLAN_ON_NOTE = ("Plan mode is on. Do not change anything yet: no writing or editing files and no commands that change things "
                 "(those calls are refused). Explore with read-only tools, ask the user if something important is unclear, then call "
                 "exit_plan_mode with a plan for the user to approve.")

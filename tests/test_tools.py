@@ -71,7 +71,7 @@ def test_tool_names_mentioned_in_manuals_exist():
     known = set(NAMES) | {"cat", "head", "tail", "find", "rg", "ls", "grep", "git", "cd", "web_search"}
     for t in tools.TOOLS:
         for word in re.findall(r"\b([a-z]+_[a-z_]+)\b", t["description"]):
-            if word in ("old_string", "new_string", "replace_all", "timeout_seconds", "case_insensitive", "node_modules", "__pycache__"):
+            if word in ("old_string", "new_string", "replace_all", "timeout_seconds", "case_insensitive", "node_modules", "__pycache__", "links_to"):
                 continue
             assert word in known, f"{t['name']}: mentions unknown tool-like name '{word}'"
         assert f"do not use {t['name']}" not in t["description"].lower().replace(f"do not use {t['name']}, ", "").replace(f"do not use {t['name']} through", ""), "a tool must not tell the model not to use itself"
@@ -89,12 +89,14 @@ def test_numbers_in_manuals_match_the_code():
     assert f"{tools.SUBAGENT_RESULT_CHARS:,}" in d["subagent"]
     assert all(n in d["subagent"] for n in tools.SUBAGENT_TOOLS)
     assert tools.SPECS["ask_user"]["input_schema"]["properties"]["choices"]["maxItems"] == 10
+    k = tools.SPECS["search_docs"]["input_schema"]["properties"]["top_k"]
+    assert k["maximum"] == tools.MAX_SEARCH_RESULTS and str(tools.MAX_SEARCH_RESULTS) in d["search_docs"] and str(tools.DEFAULT_SEARCH_RESULTS) in k["description"]
 
 
 def test_read_only_tools_are_documented_as_free_and_others_are_not():
     for t in tools.TOOLS:
         free = "no approval needed" in t["description"]
-        assert free == (t["name"] in {"glob", "grep"}) or t["name"] == "read_file", t["name"]
+        assert free == (t["name"] in {"glob", "grep", "search_docs", "explore_graph"}) or t["name"] == "read_file", t["name"]
 
 
 # ---------- input schemas ----------
@@ -112,7 +114,7 @@ def test_schemas_are_well_formed():
             assert len(p.get("description", "")) >= 20, f"{t['name']}.{k}: every input needs a real description"
             if p["type"] == "array":
                 assert p["items"]["type"] == "string" and "maxItems" in p
-            if p["type"] == "string" and k not in ("content", "new_string"):
+            if p["type"] == "string" and k not in ("content", "new_string") and "enum" not in p:  # an enum is never blank
                 assert p.get("minLength", 0) >= 1, f"{t['name']}.{k}: a blank string is never useful"
             if p["type"] == "integer" and k != "offset":
                 assert "minimum" in p and "maximum" in p, f"{t['name']}.{k}: bound every number"
@@ -193,10 +195,10 @@ class Project:
     def __exit__(self, *a):
         os.chdir(self.old)
 
-    def run(self, name, **args):
-        bad = tools.check_input(name, args)
+    def run(self, tool, **args):
+        bad = tools.check_input(tool, args)
         assert bad is None, bad
-        return tools.run(name, args, self.session)
+        return tools.run(tool, args, self.session)
 
 
 def test_happy_paths():
@@ -215,6 +217,21 @@ def test_happy_paths():
         out, err = p.run("grep", pattern="hello", glob="*.py"); assert "No matches" in out and not err
         out, err = p.run("bash", command="echo hi"); assert not err and "exit code: 0" in out and "hi" in out
         out, err = p.run("ask_user", question="Which?", choices=["a", "b"]); assert not err and "Nobody can answer" in out
+        out, err = p.run("search_docs", query="def two"); assert not err and out.startswith("1 passage for") and "a.py:1-5" in out and "     4\tdef two():" in out
+        assert tools.take_meta()["sources"][0]["path"] == "a.py" and tools.take_meta() is None  # taken once
+        out, err = p.run("explore_graph", name="two"); assert not err and out.startswith("a.two (function): 1 link:") and "<- defines a (module)  [a.py:1-5]" in out
+        assert tools.take_meta()["graph"]["center"]["name"] == "a.two"
+        out, err = p.run("explore_graph", name="zebra"); assert not err and out.startswith("Nothing in the graph") and "search_docs" in out
+        out, err = p.run("search_docs", query="hello", path_prefix="sub"); assert not err and "sub/b.txt" in out and "a.py" not in out
+        out, err = p.run("search_docs", query="zebra"); assert not err and out.startswith("No passages") and "grep" in out
+        (p.dir / "guide.md").write_text("# Guide\nintro\n## Setup\nrun the installer\n")
+        (p.dir / "tests").mkdir()
+        (p.dir / "tests" / "test_setup.py").write_text("installer = 'run the installer'\n")
+        import rag
+        rag.get(p.dir).sync()  # written by the test itself, inside the 2-second re-check window
+        out, err = p.run("search_docs", query="run the installer")
+        first, rest = out.split("\n\n", 2)[1], out.split("\n\n", 2)[2]
+        assert first.startswith("guide.md:1-4  § Guide  (score") and "tests/test_setup.py:1-1  (score" in rest and "[test file]" in rest, out
 
 
 def test_every_failure_says_what_to_do_next():
@@ -234,6 +251,8 @@ def test_every_failure_says_what_to_do_next():
             ("grep", dict(pattern="("), "Escape"),
             ("grep", dict(pattern="x", path="missing"), "glob"),
             ("subagent", dict(task="count"), "read_file"),
+            ("search_docs", dict(query="x", path_prefix="missing"), "glob"),
+            ("search_docs", dict(query="x", path_prefix="/"), "grep"),
         ]
         for name, args, hint in cases:
             out, err = p.run(name, **args)
@@ -256,6 +275,7 @@ def test_every_failure_says_what_to_do_next():
 def test_secrets_are_never_searched():
     with Project() as p:
         out, err = p.run("grep", pattern="API_KEY"); assert "abc" not in out and ".env" in out and "tell the user" in out
+        out, err = p.run("search_docs", query="API_KEY abc"); assert "API_KEY=abc" not in out and ".env" not in out and out.startswith("No passages")
 
 
 def test_long_output_is_cut_with_advice():
@@ -271,6 +291,10 @@ def test_permissions_agree_with_the_manuals():
         # the manuals say these run without asking inside the project
         assert not risky("read_file", path="a.py") and not risky("grep", pattern="x") and not risky("glob", pattern="*")
         assert not risky("subagent", task="t") and not risky("ask_user", question="q")
+        assert not risky("search_docs", query="x") and not risky("search_docs", query="x", path_prefix="sub")
+        graph_risky = lambda **a: bool(pol.assess("explore_graph", a).reasons)  # noqa: E731 (its input is called name)
+        assert not graph_risky(name="Store", relation="calls") and graph_risky(name="St‮ore")
+        assert risky("search_docs", query="x‮")  # hidden characters still come to the user
         # and these are shown to the user
         assert risky("write_file", path="/etc/hosts", content="x") and risky("write_file", path="run.sh", content="x")
         assert risky("bash", command="rm a.py") and risky("read_file", path=".env")
@@ -279,7 +303,8 @@ def test_permissions_agree_with_the_manuals():
 def test_describe_call_is_one_short_safe_line():
     for name, args in [("bash", {"command": "echo \x1b[2J\nx"}), ("read_file", {"path": "a"}), ("grep", {"pattern": "p"}),
                        ("glob", {"pattern": "*"}), ("ask_user", {"question": "q?"}), ("subagent", {"task": "t"}),
-                       ("edit_file", {"path": "a", "old_string": "o" * 500, "new_string": "n"}), ("write_file", {"path": "a", "content": "c"})]:
+                       ("edit_file", {"path": "a", "old_string": "o" * 500, "new_string": "n"}), ("write_file", {"path": "a", "content": "c"}),
+                       ("search_docs", {"query": "frozen\nprefix", "top_k": 3}), ("explore_graph", {"name": "Controller", "depth": 2})]:
         line = tools.describe_call(name, args)
         assert line.startswith(name + "(") and "\x1b" not in line and "\n" not in line and len(line) < 300, line
 
@@ -300,6 +325,12 @@ def test_outcome_says_how_a_call_went_from_our_own_result_text():
     assert o("grep", {}, "a.py:1:x\nb.py:2:x\n[Search stopped after 200 matches: this is only part of the results.]", False) == "2+ matches"
     assert o("ask_user", {}, "The user answered: Go", False) == "answered: Go"
     assert o("edit_file", {}, "Edited", False) is None and o("read_file", {}, "nope", True) is None
+    assert o("search_docs", {}, "5 passages for 'x' (index: 9 files, ranked by keyword match):", False) == "5 passages"
+    assert o("search_docs", {}, "1 passage for 'x' (index", False) == "1 passage"
+    assert o("search_docs", {}, "No passages match 'x' in the index", False) == "no matches"
+    assert o("explore_graph", {}, "pkg.Store (class): 12 links:\n  x", False) == "12 links"
+    assert o("explore_graph", {}, "a (module): 1 link within 2 hops:", False) == "1 link"
+    assert o("explore_graph", {}, "Nothing in the graph matches 'x'", False) == "no match"
 
 
 def test_a_front_end_that_does_not_know_an_event_shows_its_text():

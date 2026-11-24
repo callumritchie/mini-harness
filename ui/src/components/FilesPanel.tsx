@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { languageFor } from "../lib/lang";
 import type { TreeNode } from "../protocol";
@@ -66,6 +66,8 @@ function Viewer({ path, onBack }: { path: string; onBack: () => void }) {
   const wrap = useStore((s) => s.wrap);
   const toggleWrap = useStore((s) => s.toggleWrap);
   const patch = useStore((s) => s.patch);
+  const range = useStore((s) => s.selectedRange); // a search_docs passage: these lines are marked and scrolled to
+  const first = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let live = true;
     setState({});
@@ -74,9 +76,13 @@ function Viewer({ path, onBack }: { path: string; onBack: () => void }) {
       .catch((e: Error) => live && setState({ error: e.message }));
     return () => { live = false; };
   }, [path]);
+  useEffect(() => {
+    first.current?.scrollIntoView?.({ block: "center" });
+  }, [state.content, range]);
   const lang = languageFor(path);
   const lines = state.content?.split("\n") ?? [];
   if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  const marked = (n: number) => range !== null && n >= range.start && n <= range.end;
   return (
     <div className="viewer">
       <div className="viewer-head">
@@ -91,7 +97,9 @@ function Viewer({ path, onBack }: { path: string; onBack: () => void }) {
       {state.content !== undefined && (
         <div className={`code ${wrap ? "wrap" : "nowrap"}`}>
           {lines.map((l, i) => (
-            <div key={i} className="row"><span className="no">{i + 1}</span><code><CodeLine text={l} lang={lang} /></code></div>
+            <div key={i} ref={range?.start === i + 1 ? first : undefined} className={`row ${marked(i + 1) ? "marked" : ""}`}>
+              <span className="no">{i + 1}</span><code><CodeLine text={l} lang={lang} /></code>
+            </div>
           ))}
         </div>
       )}
@@ -115,7 +123,7 @@ export function FilesPanel() {
   }, []);
   useEffect(load, [load, running]); // reload when a task ends: it may have created files
 
-  if (selected) return <Viewer path={selected} onBack={() => patch({ selectedFile: null })} />;
+  if (selected) return <Viewer path={selected} onBack={() => patch({ selectedFile: null, selectedRange: null })} />;
   if (error) return <div className="cant-wrap"><Cant icon="alert-circle" title="Can't list the files">{error}</Cant></div>;
   if (!tree) return <div className="empty-panel">Loading…</div>;
   const toggle = (p: string) => setOpen((o) => { const n = new Set(o); if (n.has(p)) n.delete(p); else n.add(p); return n; });
@@ -129,7 +137,7 @@ export function FilesPanel() {
       <div className="tree-rows">
         {tree.tree.length === 0 && <div className="empty-panel">This folder is empty.</div>}
         {tree.tree.length > 0 && shown.length === 0 && <div className="empty-panel">No files match “{filter}”.</div>}
-        {shown.map((n) => <Node key={n.path} node={n} depth={0} open={open} toggle={toggle} select={(p) => patch({ selectedFile: p })} selected={selected} changes={changes} filtering={filter.trim() !== ""} />)}
+        {shown.map((n) => <Node key={n.path} node={n} depth={0} open={open} toggle={toggle} select={(p) => patch({ selectedFile: p, selectedRange: null })} selected={selected} changes={changes} filtering={filter.trim() !== ""} />)}
       </div>
       <p className="tree-note">Read-only. NEW and M mark files written in this session. Locked files are secrets: shown by name, never opened.</p>
     </div>

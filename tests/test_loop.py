@@ -176,6 +176,8 @@ assert "plan mode is on" in pp.decide("edit_file", {"path": str(tmp / "a.txt"), 
 assert not pp.decide("bash", {"command": "rm a.txt"}).allowed and not pp.decide("mcp__srv__tool", {}).allowed
 assert pp.decide("bash", {"command": "ls"}).allowed and pp.decide("read_file", {"path": str(tmp / "a.txt")}).allowed
 assert pp.decide("glob", {"pattern": "*"}).allowed and pp.decide("exit_plan_mode", {"plan": "p"}).allowed
+# the read-only search tools run in plan mode too: planning is mostly finding things out
+assert pp.decide("search_docs", {"query": "x"}).allowed and pp.decide("explore_graph", {"name": "x"}).allowed
 pp.mode = "allow"; assert not pp.decide("write_file", {"path": str(tmp / "p.txt"), "content": "x"}).allowed  # allow mode does not lift it
 pp.plan = False; assert pp.decide("write_file", {"path": str(tmp / "p.txt"), "content": "x"}).allowed
 assert "exit_plan_mode" not in tools.SUBAGENT_TOOLS and tools.check_input("exit_plan_mode", {}) is not None
@@ -419,7 +421,7 @@ fk = Fake(script)
 agent.run_task(mkrun(fk, permissions=P("ask"), say=lambda m: None), parent, "How many lines in total?")
 assert not (proj / "evil.txt").exists() and parent.messages[-1]["content"][0].text == "The total is 3."
 assert parent.messages[2]["content"][0]["content"] == "3"  # only the final answer comes back
-assert [t["name"] for t in fk.calls[1][3]["tools"]] == ["read_file", "glob", "grep"]  # read-only, nothing else offered
+assert [t["name"] for t in fk.calls[1][3]["tools"]] == ["read_file", "glob", "grep", "search_docs", "explore_graph"]  # read-only, nothing else offered
 sub_msgs = fk.calls[2][3]["messages"]  # the subagent's second call: it saw only its own conversation
 assert sub_msgs[0]["role"] == "user" and "Count the lines" in sub_msgs[0]["content"] and "How many lines in total" not in json.dumps(sub_msgs, default=str)
 refusals = sub_msgs[2]["content"]; assert [r["is_error"] for r in refusals] == [False, True, True] and "read-only" in refusals[1]["content"] and "Refused" in refusals[2]["content"]
@@ -630,7 +632,7 @@ script = [with_usage(reply(text("All done.\nDONE: created add.py and test_add.py
 fk = Fake(script); r = mkrun(fk, limits=Limits(s, max_turns=10), permissions=P("ask"), say=lambda m: None)
 ok, out, gr = agent.do_goal(r, s, "an add function with a test", "exit 0", say=lambda m: None)
 assert ok and "GOAL DONE" in out and "VERDICT: DONE" in out and "Trust nothing" in fk.calls[1][3]["system"]
-assert [t["name"] for t in fk.calls[1][3]["tools"]] == ["read_file", "glob", "grep"] and "unverified" in fk.calls[1][3]["messages"][0]["content"]
+assert [t["name"] for t in fk.calls[1][3]["tools"]] == ["read_file", "glob", "grep", "search_docs", "explore_graph"] and "unverified" in fk.calls[1][3]["messages"][0]["content"]
 s = new(); script = [with_usage(reply(text(f"DONE: attempt {i}, everything is finished and verified"), stop="end_turn")) for i in range(6)]
 r = mkrun(Fake(script), limits=Limits(s, max_turns=4), say=lambda m: None)  # an always-failing check ends at the limit as 'not done'
 ok, out, gr = agent.do_goal(r, s, "g", "false", say=lambda m: None)

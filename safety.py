@@ -261,7 +261,8 @@ class Policy:
     # --- assessing a tool call ---
 
     TITLES = {"bash": "run a command", "read_file": "read a file", "glob": "list files", "grep": "search files",
-              "write_file": "write a file", "edit_file": "edit a file"}
+              "search_docs": "search the project index", "explore_graph": "look up the project graph", "write_file": "write a file",
+              "edit_file": "edit a file"}
 
     def assess(self, name, args):
         if name.startswith("mcp__"):
@@ -318,6 +319,20 @@ class Policy:
         a = self._reads("grep", [args.get("path", ".")], f"for {visible(args['pattern'])}")
         self._hidden(a, args["pattern"])
         a.reasons = [r for r in a.reasons if r[0] != "secret"]  # the tool never looks inside secret-looking files
+        return a
+
+    def _assess_search_docs(self, args):
+        a = self._reads("search_docs", [args.get("path_prefix", ".")], f"for {visible(args['query'])}")
+        self._hidden(a, args["query"])
+        a.reasons = [r for r in a.reasons if r[0] != "secret"]  # secret-looking files are never in the index
+        return a
+
+    def _assess_explore_graph(self, args):
+        a = self._reads("explore_graph", ["."], f"for {visible(args['name'])}")  # the graph only ever covers the project
+        self._hidden(a, args["name"])
+        if args.get("relation"):
+            self._hidden(a, args["relation"])
+        a.reasons = [r for r in a.reasons if r[0] != "secret"]
         return a
 
     def _writes(self, name, args, preview):
