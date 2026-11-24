@@ -18,6 +18,7 @@ Keywords for reviewing every state (used by the screenshot test; they are not in
   edit              reads README.md, then edits a line of it (a diff with a removal, additions and context)
   worst case …      worst-case data for stress-testing the layout: deep paths, 1,200 files, long lines, CJK, RTL, emoji (dev toggle)
   one               exactly one of everything, so every count reads 1 (dev toggle)
+  long code         a long reply with many highlighted code blocks, streamed (for measuring render cost while streaming)
   anything else     echoes your message
 """
 import itertools
@@ -163,6 +164,46 @@ The rollout plan is at https://wiki.northwind-industries-holdings.example.com/di
 
 بارثولوميو فيتزجيرالد · บาร์โธโลมิว ฟิตซ์เจอรัลด์ · 会議メモ 🚀"""
 
+# A long reply with highlighted code, like a real model's answer to "refactor this": the whole message is re-parsed and
+# re-highlighted on every streamed word, so this is the heaviest thing the chat renders.
+_CODE_PY = """```python
+def migrate(record: dict, schema: dict) -> dict:
+    \"\"\"Move one customer record to the 2027 schema; unknown fields are kept under `legacy`.\"\"\"
+    out, legacy = {}, {}
+    for key, value in record.items():
+        target = schema.get(key)
+        if target is None:
+            legacy[key] = value
+        elif isinstance(value, list):
+            out[target] = [str(v).strip().lower() for v in value if v]
+        else:
+            out[target] = value
+    return {**out, "legacy": legacy} if legacy else out
+```"""
+_CODE_TS = """```typescript
+export async function migrateAll(paths: string[], schema: Record<string, string>): Promise<Report> {
+  const report: Report = { migrated: 0, skipped: [], warnings: new Map() };
+  for (const path of paths) {
+    const record = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    if (!record.id) { report.skipped.push(path); continue; }
+    const next = migrate(record, schema);
+    await writeFile(path, JSON.stringify(next, null, 2));
+    report.migrated += 1;
+  }
+  return report;
+}
+```"""
+LONG_CODE = "\n\n".join(
+    f"### Step {i + 1}: {title}\n\nThis step {what}. The function below is idempotent, so running it twice on the same folder "
+    f"changes nothing the second time.\n\n{_CODE_PY if i % 2 == 0 else _CODE_TS}"
+    for i, (title, what) in enumerate([("map the fields", "maps every old field name onto the new schema"),
+                                        ("walk the folder", "reads each record, migrates it and writes it back"),
+                                        ("keep the unknowns", "keeps fields the schema does not know under legacy"),
+                                        ("report", "counts what moved and what was skipped"),
+                                        ("normalise tags", "lower-cases and trims every tag"),
+                                        ("write atomically", "writes to a temporary file first, then renames it")] * 2))
+
+
 # One of everything, so every count reads 1 ("1 step", "+1", "1 line", "1 prompt").
 ONE_PROMPT = "one"
 
@@ -193,6 +234,8 @@ def script(messages):
     typed = (text if results is None else _last_typed(messages)).lower()
     if typed.startswith("worst case"):
         return _worst(messages)
+    if typed == "long code":
+        return [_text(LONG_CODE)], "end_turn"
     if typed == ONE_PROMPT:
         if results is None:  # a new name each time: write_file refuses to overwrite a file it has not read
             return [_tool("write_file", path=f"one-{next(_ids)}.txt", content="1\n")], "tool_use"

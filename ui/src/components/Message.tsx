@@ -83,7 +83,7 @@ export function Message({ item, compacting, span }: { item: Item; compacting?: b
       return (
         <div className="msg assistant">
           <div className="body">
-            <Markdown text={item.text} />
+            <Markdown text={item.text} streaming={item.streaming} />
             {item.streaming && <span className="cursor" aria-hidden />}
           </div>
         </div>

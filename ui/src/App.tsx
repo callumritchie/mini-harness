@@ -11,6 +11,7 @@ import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import type { ServerEvent, SessionRow, TranscriptItem } from "./protocol";
 import { connect } from "./socket";
+import { createBatcher } from "./lib/stream";
 import { fromTranscript, useStore } from "./store";
 import { Spinner } from "./components/Spinner";
 import { Logo } from "./components/Logo";
@@ -63,12 +64,13 @@ export default function App() {
 
   useEffect(() => {
     if (!token) return;
-    const { apply, patch, setSocket } = useStore.getState();
+    const { applyAll, patch, setSocket } = useStore.getState();
     let firstHello = true;
+    const batch = createBatcher(applyAll);
     const socket = connect(
       token,
       (ev: ServerEvent) => {
-        apply(ev);
+        batch.push(ev);
         if (ev.type === "hello") {
           // a fresh page: draw the conversation so far from the server
           if (firstHello && useStore.getState().items.length === 0) {
