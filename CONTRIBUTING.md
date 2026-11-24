@@ -24,3 +24,4 @@ Ground rules:
   Don't add a way around it, and add a test next to the behaviour you change.
 - Every tool call gets an answer, and every error says what to try next (see "Tool patterns" in `DESIGN.md`).
 - Keep `DESIGN.md` up to date when you change a decision.
+- Before building or changing UI, read "Web UI rules" in `DESIGN.md`.
