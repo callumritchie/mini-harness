@@ -251,6 +251,50 @@ with client3.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws2:  # the 
     again = ws2.receive_json(); assert again["type"] == "permission_request" and again["id"] == req["id"]
     ws2.send_json({"type": "answer_permission", "id": req["id"], "allow": False}); collect(ws2, "done")
 
+# ---------- reasoning, plan mode and attachments ----------
+ctl4, ui4, client4 = make(delay=0.0)
+(project / "demo.py").unlink(missing_ok=True)
+PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 20
+up = lambda data, name, kind, headers=H: client4.post("/api/attachments", content=data, headers={**headers, "X-Filename": name, "Content-Type": kind})
+assert up(PNG, "shot.png", "image/png", headers={}).status_code == 401  # the token is needed here too
+r = up(b"PK\x03\x04", "report.docx", "application/octet-stream"); assert r.status_code == 400 and "Save it as PDF" in r.json()["detail"]
+big = up(b"x" * (webserver.MAX_UPLOAD_BYTES + 1), "big.txt", "text/plain"); assert big.status_code == 413
+shot = up(PNG, "my%20shot.png", "image/png").json(); assert shot["name"] == "my shot.png" and shot["kind"] == "image" and shot["size"] == len(PNG)
+with client4.websocket_connect(f"/ws?token={TOKEN}", headers=WS) as ws:
+    assert ws.receive_json()["info"]["plan"] is False
+    # the model's reasoning streams as its own events, before the reply
+    ws.send_json({"type": "send", "text": "hello"}); ev = collect(ws, "done"); t = types(ev)
+    assert "thinking_delta" in t and t.index("thinking_delta") < t.index("text_delta")
+    assert "".join(e["text"] for e in ev if e["type"] == "thinking_delta").startswith("A greeting.")
+    # a message with only a file; the file is gone from the server once sent
+    ws.send_json({"type": "send", "text": "", "attachments": [shot["id"]]}); ev = collect(ws, "done")
+    assert "`my shot.png`" in "".join(e["text"] for e in ev if e["type"] == "text_delta") and ui4.uploads == {}
+    ws.send_json({"type": "send", "text": "again", "attachments": [shot["id"]]}); assert "no longer on the server" in collect(ws, "error")[-1]["message"]
+    items = client4.get(f"/api/session/{ctl4.session.id}", headers=H).json()["items"]
+    sent = [i for i in items if i["kind"] == "user"][1]; assert sent["attachments"] == [{"name": "my shot.png", "kind": "image"}] and "iVBOR" not in str(items)
+    assert any(i["kind"] == "thinking" for i in items)
+    # plan mode: on, a plan comes to the browser, "keep planning" sends feedback, approval turns it off and the work is done
+    ws.send_json({"type": "set_plan", "on": True}); assert "Plan mode is on" in collect(ws, "notice")[-1]["text"]
+    assert collect(ws, "info")[-1]["info"]["plan"] is True
+    ws.send_json({"type": "goal", "text": "x"}); assert "Plan mode is on" in collect(ws, "done")[-1]["error"]
+    ws.send_json({"type": "send", "text": "plan a greeting module"})
+    req = collect(ws, "plan_request")[-1]; assert "Plan: add a greeting module" in req["plan"]
+    ws.send_json({"type": "answer_plan", "id": req["id"], "approve": False, "feedback": "call it hello.py"})
+    req = collect(ws, "plan_request")[-1]; assert not (project / "demo.py").exists()
+    ws.send_json({"type": "answer_plan", "id": req["id"], "approve": "yes"})  # a garbage answer is not an approval
+    req = collect(ws, "plan_request")[-1]
+    ws.send_json({"type": "answer_plan", "id": req["id"], "approve": True})
+    ev = collect(ws, "done"); t = types(ev)
+    assert {"type": "plan_mode", "on": False} in ev and ev[-1]["info"]["plan"] is False and (project / "demo.py").exists()
+    res = [e for e in ev if e["type"] == "tool_result" and e["name"] == "exit_plan_mode"]; assert res[-1]["outcome"] == "approved"
+    # /clear is a new session: uploads waiting on the server are dropped too
+    waiting = up(b"note\n", "n.txt", "text/plain").json(); assert waiting["kind"] == "text" and len(ui4.uploads) == 1
+    ws.send_json({"type": "new_session"}); collect(ws, "session_loaded"); assert ui4.uploads == {}
+# a plan mode write in a fresh session is refused, with the reason the model needs
+ctl4.set_plan(True)
+assert "plan mode is on" in ctl4.permissions.decide("write_file", {"path": "x.txt", "content": "x"}).message
+assert ctl4.session.notes[-1].startswith("Plan mode is on")
+
 # ---------- files: tree, viewer, and what is never served ----------
 tree = client.get("/api/files", headers=H).json()
 names = {e["name"]: e for e in tree["tree"]}
@@ -268,6 +312,14 @@ assert "‮" not in shown and "\x1b" not in shown and "⟨U+202E" in shown and "
 # ---------- tool input shown to the browser is made printable ----------
 assert webserver.clean({"command": "echo \x1b[2J" + "x" * 5000})["command"].startswith("echo ⟨ESC⟩[2J") and "more characters" in webserver.clean("y" * 5000)
 assert webserver.clean(["a​b"]) == ["a⟨U+200B ZERO WIDTH SPACE⟩b"]
+
+# ---------- a refresh whose old socket closes after the new one opens still gets events ----------
+ctl5, ui5, client5 = make(delay=0.0)
+old = client5.websocket_connect(f"/ws?token={TOKEN}", headers=WS); old.__enter__(); old.receive_json()
+new = client5.websocket_connect(f"/ws?token={TOKEN}", headers=WS); new.__enter__(); new.receive_json()
+old.__exit__(None, None, None)  # the old page's close arrives late
+new.send_json({"type": "send", "text": "hello"}); assert "done" in types(collect(new, "done"))
+new.__exit__(None, None, None)
 
 # ---------- context data and the engine hooks ----------
 data = client.get("/api/context", headers=H).json()

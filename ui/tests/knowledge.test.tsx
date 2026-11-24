@@ -145,7 +145,7 @@ describe("KnowledgePanel", () => {
     status = { ...base, embed_installed: true, embed_downloaded: true, embedder: "bge", embedded: 25, embedding: { done: 5, total: 15 } };
     const { container } = render(<KnowledgePanel />);
     await waitFor(() => expect(screen.getByText("25 of 40")).toBeTruthy());
-    expect(container.querySelector<HTMLElement>(".k-progress > span")?.style.width).toBe("33%");
+    expect(container.querySelector<HTMLElement>(".k-progress > span")?.style.transform).toBe(`scaleX(${5 / 15})`); // a third done
   });
 
   it("asks before a paid graph build, showing the estimate", async () => {

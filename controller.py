@@ -11,6 +11,7 @@ from typing import Optional
 import anthropic
 
 import agent
+import attachments
 import compaction
 import context
 import embed
@@ -20,7 +21,7 @@ import rag
 import sessionlog
 import skills
 import tools
-from permissions import MODE_HELP, MODES
+from permissions import MODE_HELP, MODES, PLAN_OFF_NOTE, PLAN_ON_NOTE
 from session import Limits, NotFinished, Session, UserError
 
 
@@ -28,6 +29,7 @@ class UI:
     """What a front end provides. Every method has a harmless default, so a front end implements only what it shows."""
 
     def text(self, delta): pass  # a piece of the model's reply, as it streams
+    def thinking(self, delta): pass  # a piece of the model's reasoning (a summary), as it streams
     def tool_call(self, call_id, name, args, display): pass  # a tool is about to run
     def tool_result(self, call_id, name, text, is_error, meta=None): pass  # meta: {"sources": [...]} or {"graph": {...}}, structured
     def usage(self, usage, cost, summary): pass  # tokens and cost of one call; summary = (total usd, complete, note)
@@ -36,6 +38,7 @@ class UI:
     def status(self, running): pass
     def ask_permission(self, assessment, note): return False  # the yes/no question; must return True only for an explicit yes
     def ask_user(self, question, choices): return None  # the ask_user tool; None means nobody can answer
+    def approve_plan(self, plan): return None  # exit_plan_mode: ("approve", None), ("revise", feedback), or None (nobody can answer)
     def parallel(self, call_ids): pass  # these tool calls (from one reply) are about to run at the same time
 
     def event(self, kind, data, text):
@@ -79,7 +82,9 @@ class Controller:
         self.permissions.ask = self.ui.ask_permission
         self.permissions.say = self.ui.notice
         self.mcp = agent.start_mcp_and_skills(self.args)
-        self.session.ask_human = self.ui.ask_user
+        self._bind(self.session)
+        if getattr(self.args, "plan", False):
+            self.set_plan(True)
         self._index_in_background()
         return self.info()
 
@@ -118,6 +123,7 @@ class Controller:
             "agents_md": context.AGENTS_FILE in s.system_parts, "skills": [x["name"] for x in skills.discover(Path.cwd())[0]],
             "mcp_tools": sorted(self.mcp.tools) if self.mcp else [], "price_known": pricing.prices(self.model) is not None,
             "cost": {"usd": usd, "complete": complete, "note": note}, "turns": s.totals["calls"], "compactions": s.compactions,
+            "plan": self.permissions.plan,
             "index": self.index_status(),
         }
 
@@ -127,13 +133,25 @@ class Controller:
     def _bind(self, session):
         self.session = session
         session.ask_human = self.ui.ask_user
+        session.approve_plan = self._approve_plan
+        session.plan_mode = lambda: self.permissions.plan
+        if getattr(self, "permissions", None) is not None and self.permissions.plan:  # a fresh conversation must be told too
+            session.notes.append(PLAN_ON_NOTE)
+
+    def _approve_plan(self, plan):
+        """exit_plan_mode asks the person; an approval turns plan mode off at once, so the same task can carry the plan out."""
+        answer = self.ui.approve_plan(plan)
+        if answer is not None and answer[0] == "approve":
+            self.permissions.plan = False
+            self.ui.event("plan_mode", {"on": False}, "Plan approved: plan mode is off.")
+        return answer
 
     # ---------- running a task ----------
 
     def make_run(self, **overrides):
         s = self.session
         settings = dict(
-            on_text=self.ui.text, on_tool=lambda name, args: None,
+            on_text=self.ui.text, on_thinking=self.ui.thinking, on_tool=lambda name, args: None,
             on_call=lambda cid, name, args: self.ui.tool_call(cid, name, args, tools.describe_call(name, args)),
             on_result=self.ui.tool_result, on_change=self._changed, cancel=self.cancel, say=self.ui.notice,
             on_usage=lambda u, usd: self.ui.usage(u, usd, s.cost_summary()), event=self.ui.event, on_parallel=self.ui.parallel,
@@ -174,14 +192,19 @@ class Controller:
             self.lock.release()
             self._index_in_background()  # the task may have changed files: catch the graph and vectors up
 
-    def send(self, text):
+    def send(self, text, files=()):
+        """Run one task. `files` are attachments.Attachment objects; they go to the model before the text."""
         def go():
-            reply = agent.run_task(self.make_run(), self.session, text)
+            task = attachments.to_blocks(list(files), text, self.provider) if files else text
+            reply = agent.run_task(self.make_run(), self.session, task, human=text)
             return TaskResult(text=agent.final_text(reply), stop_reason=reply.stop_reason, cut_off=reply.stop_reason == "max_tokens")
         return self._guard(go)
 
     def goal(self, text, verify=None, max_turns=None):
         """Goal mode on this session. Returns a TaskResult whose text is the outcome ('GOAL DONE ...' or 'GOAL NOT DONE ...')."""
+        if self.permissions.plan:
+            return TaskResult(error="Plan mode is on. Turn it off first: goal mode needs to change files.")
+
         def go():
             limits = Limits(self.session, max_turns=max_turns or self.args.max_turns or agent.GOAL_STEPS, max_cost=self.args.max_cost)
             run = self.make_run(limits=limits)
@@ -207,6 +230,15 @@ class Controller:
             raise UserError(f"Unknown mode '{mode}'. Choose one of: {', '.join(MODES)}.")
         self.permissions.mode = mode
         return f"Permissions: {mode} - {MODE_HELP[mode]}."
+
+    def set_plan(self, on):
+        """Plan mode on or off. The model is told at the end of the next message (the prompt cache is not touched)."""
+        on = bool(on)
+        if on != self.permissions.plan:
+            self.permissions.plan = on
+            self.session.notes.append(PLAN_ON_NOTE if on else PLAN_OFF_NOTE)
+        return ("Plan mode is on: the agent can only read and search until you approve its plan." if on
+                else "Plan mode is off: the agent can make changes again (your permission mode still applies).")
 
     def set_effort(self, level):
         """level: one of agent.EFFORTS, or None/'default' to clear."""

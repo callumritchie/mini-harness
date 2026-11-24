@@ -47,7 +47,14 @@ def with_usage(r, i=10, o=10): r.usage = Usage(i, o); return r
 
 
 class Ctx:
-    def __init__(self, r): self.r, self.text_stream = r, [b.text for b in r.content if b.type == "text"]
+    """A stream: its events (text and thinking deltas, one per block), then the final message."""
+    def __init__(self, r): self.r = r
+    def __iter__(self):
+        for b in self.r.content:
+            if b.type == "text":
+                yield NS(type="content_block_delta", delta=NS(type="text_delta", text=b.text))
+            elif b.type == "thinking":
+                yield NS(type="content_block_delta", delta=NS(type="thinking_delta", thinking=b.thinking))
     def __enter__(self): return self
     def __exit__(self, *a): return False
     def get_final_message(self): return self.r
@@ -146,8 +153,93 @@ spy = Spy([reply(use("u1", "glob", pattern="*", path=str(tmp))), final, final])
 go(spy, s, "first task"); s.notes.append("The model was switched."); go(spy, s, "second task")
 assert all(x[0] == frozen for x in spy.sent) and spy.sent[1][1][:len(spy.sent[0][1])] == spy.sent[0][1]
 assert "switched" in s.messages[-2]["content"][-1]["text"] and s.messages[-2]["content"][0]["text"] == "second task"
-assert spy.sent[-1][2] == {"cache_control": {"type": "ephemeral"}}
+assert spy.sent[-1][2] == {"cache_control": {"type": "ephemeral"}, "thinking": {"type": "adaptive", "display": "summarized"}}
 c = Spy([final]); agent.run_task(mkrun(c, effort="low"), new(), "x"); assert c.sent[0][2]["output_config"] == {"effort": "low"}
+
+# ---------- visible reasoning: a summary is asked for on models that think adaptively, and streams to on_thinking ----------
+assert all(agent.shows_thinking(m) for m, _ in agent.MODEL_CHOICES if m.startswith("claude"))
+assert agent.shows_thinking("claude-opus-4-6") and agent.shows_thinking("claude-fable-5-1")
+assert not any(agent.shows_thinking(m) for m in ("claude-sonnet-4-5", "claude-haiku-4-5", "claude-3-5-sonnet-latest", "claude-sonnet-4-20250514", "deepseek-flash"))
+c = Spy([final]); agent.run_task(agent.Run(c, "anthropic", "claude-haiku-4-5", perm()), new(), "x"); assert "thinking" not in c.sent[0][2]
+assert agent.request_body(agent.Run(None, "deepseek", "deepseek-flash", perm())) == {}
+seen_t, seen_x = [], []
+thought = reply(NS(type="thinking", thinking="Let me look.", signature="sig"), text("done"), stop="end_turn")
+s = new(); agent.run_task(mkrun(Fake([thought]), on_thinking=seen_t.append, on_text=seen_x.append), s, "x")
+assert seen_t == ["Let me look."] and seen_x == ["done"]
+items = sessionlog.render_messages(s.messages)
+assert [i["kind"] for i in items] == ["user", "thinking", "assistant"] and items[1]["text"] == "Let me look."
+
+# ---------- plan mode: read-only until a plan is approved ----------
+pp = perm(); pp.plan = True
+assert not pp.decide("write_file", {"path": str(tmp / "p.txt"), "content": "x"}).allowed
+assert "plan mode is on" in pp.decide("edit_file", {"path": str(tmp / "a.txt"), "old_string": "h", "new_string": "j"}).message
+assert not pp.decide("bash", {"command": "rm a.txt"}).allowed and not pp.decide("mcp__srv__tool", {}).allowed
+assert pp.decide("bash", {"command": "ls"}).allowed and pp.decide("read_file", {"path": str(tmp / "a.txt")}).allowed
+assert pp.decide("glob", {"pattern": "*"}).allowed and pp.decide("exit_plan_mode", {"plan": "p"}).allowed
+# the read-only search tools run in plan mode too: planning is mostly finding things out
+assert pp.decide("search_docs", {"query": "x"}).allowed and pp.decide("explore_graph", {"name": "x"}).allowed
+pp.mode = "allow"; assert not pp.decide("write_file", {"path": str(tmp / "p.txt"), "content": "x"}).allowed  # allow mode does not lift it
+pp.plan = False; assert pp.decide("write_file", {"path": str(tmp / "p.txt"), "content": "x"}).allowed
+assert "exit_plan_mode" not in tools.SUBAGENT_TOOLS and tools.check_input("exit_plan_mode", {}) is not None
+s = new()
+assert "Plan mode is not on" in tools.run("exit_plan_mode", {"plan": "p"}, s)[0]
+s.plan_mode = lambda: True
+assert "Nobody can approve" in tools.run("exit_plan_mode", {"plan": "p"}, s)[0]  # headless: the plan is the answer
+s.approve_plan = lambda plan: ("revise", "use tabs")
+out = tools.run("exit_plan_mode", {"plan": "p"}, s)[0]
+assert out.startswith(tools.PLAN_CHANGES) and "use tabs" in out and tools.outcome("exit_plan_mode", {}, out, False) == "changes asked"
+s.approve_plan = lambda plan: ("approve", None)
+assert tools.run("exit_plan_mode", {"plan": "p"}, s) == (tools.PLAN_APPROVED, False)
+assert tools.outcome("exit_plan_mode", {}, tools.PLAN_APPROVED, False) == "approved"
+assert tools.describe_call("exit_plan_mode", {"plan": "a\nb"}) == "exit_plan_mode(plan, 2 lines)"
+# in the loop: a write is refused until the plan is approved, then the same task makes it
+pp = perm(); pp.plan = True; s = new(); s.plan_mode = lambda: pp.plan
+def approve(plan): pp.plan = False; return ("approve", None)
+s.approve_plan = approve
+target = tmp / "planned.txt"
+go(Fake([reply(use("w1", "write_file", path=str(target), content="x")), reply(use("p1", "exit_plan_mode", plan="write it")),
+         reply(use("w2", "write_file", path=str(target), content="x")), final]), s, permissions=pp)
+assert results_of(s)["w1"]["is_error"] and results_of(s, 4)["p1"]["content"] == tools.PLAN_APPROVED
+assert not results_of(s, 6)["w2"]["is_error"] and target.read_text() == "x"
+
+# ---------- attachments: images, PDFs and text become content blocks; anything else is refused with a reason ----------
+import attachments
+PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 20
+img, pdf, txt = attachments.classify("shot.png", "image/png", PNG), attachments.classify("doc.pdf", "", b"%PDF-1.4"), attachments.classify("a.py", "text/x-python", b"print(1)\n")
+assert (img.kind, pdf.kind, txt.kind) == ("image", "pdf", "text") and pdf.media_type == "application/pdf"
+for name, kind, data, why in [("x.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", b"PK\x03\x04\xff\xfe", "Save it as PDF"),
+                              ("notes.rtf", "text/rtf", b"{\\rtf1 hi}", "Save it as PDF"),
+                              ("x.bmp", "image/bmp", b"BM", "PNG, JPEG"), ("big.png", "image/png", b"x" * (attachments.MAX_IMAGE_BYTES + 1), "at most"),
+                              ("e.txt", "text/plain", b"", "empty"), ("bin", "", b"a\x00b", "binary")]:
+    try:
+        attachments.classify(name, kind, data); raise AssertionError(name)
+    except UserError as e:
+        assert why in str(e), (name, e)
+blocks = attachments.to_blocks([img, pdf, txt], "what is this?", "anthropic")
+assert [b["type"] for b in blocks] == ["text", "image", "text", "document", "text", "text", "text"]
+assert blocks[0]["text"] == "[Attached file: shot.png]" and blocks[1]["source"]["media_type"] == "image/png" and blocks[-1]["text"] == "what is this?"
+assert blocks[5]["text"] == '<file name="a.py">\nprint(1)\n\n</file>'
+try:
+    attachments.to_blocks([img], "x", "deepseek"); raise AssertionError("deepseek image")
+except UserError as e:
+    assert "Claude model" in str(e)
+assert attachments.to_blocks([txt], "", "deepseek")[-1]["type"] == "text"  # text files work everywhere; no empty text block
+try:
+    attachments.check_batch([txt] * (attachments.MAX_FILES + 1)); raise AssertionError("too many")
+except UserError:
+    pass
+# sent with a task (and a note): the judge reads only the typed text; the log, titles and transcript show names, never contents
+s = Session.start("claude-opus-5-5"); s.notes.append("a note")
+agent.run_task(mkrun(Fake([final])), s, blocks, human="what is this?")
+assert s.user_messages[-1] == "what is this?" and s.messages[0]["content"][-1]["text"] == "[Note: a note]"
+assert sessionlog._text_of(s.messages[0]["content"]) == "what is this?"
+items = sessionlog.render_messages(s.messages)
+assert items[0] == {"kind": "user", "text": "what is this?", "attachments": [{"name": "shot.png", "kind": "image"}, {"name": "doc.pdf", "kind": "pdf"}, {"name": "a.py", "kind": "text"}]}
+only = sessionlog.render_messages([{"role": "user", "content": attachments.to_blocks([img], "", "anthropic")}])
+assert only == [{"kind": "user", "text": "", "attachments": [{"name": "shot.png", "kind": "image"}]}]
+rows, _ = context.breakdown(s, [])
+assert rows["Attached files"] == context.IMAGE_TOKENS and rows["Your messages"] < 100  # an image is not counted by its base64
+assert canon(Session.resume(s.log.path).messages) == canon(s.messages)  # attachments survive -c
 
 # ---------- strict input rules ----------
 bad = lambda name, **a: tools.check_input(name, a)

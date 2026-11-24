@@ -63,12 +63,16 @@ Browser → server messages (`ClientRequest`). **A design may add UI for these o
 | View changes | `GET /api/changes` | Live-captured only. |
 | View context breakdown | `GET /api/context` | |
 | List sessions / get a transcript | `GET /api/sessions`, `/api/session/{id}` | |
+| Plan mode on/off | `set_plan {on}` | Allowed while running (takes effect on the next tool call). `info.plan` says whether it is on. |
+| Approve a plan / ask for changes | `answer_plan {id, approve, feedback?}` | Only `approve: true` approves; approval turns plan mode off. |
+| Attach a file | `POST /api/attachments` (raw body, `X-Filename` URI-encoded, `Content-Type`) → `{id, name, kind, size}`; then `send {text, attachments: [ids]}` | Images (PNG/JPEG/GIF/WebP ≤5 MB), PDFs (≤20 MB), text/code (≤400k chars); anything else is a 400 with a sentence saying what to do. ≤10 per message. Text may be empty when files are attached. |
 
-Slash commands in the composer (all map to the actions above): `/new` (`/clear`), `/resume ID`, `/model NAME`, `/permissions ask|judge|allow`,
-`/effort low|medium|high|xhigh|max|default`, `/limit TOKENS`, `/compact [focus]`, `/goal` (opens form), `/context` (opens Context tab),
-`/help`. Keyboard: Enter send, Shift+Enter newline, Esc stop (when running), Cmd/Ctrl+K focus composer, Cmd/Ctrl+B toggle session list.
+Slash commands in the composer (all map to the actions above): `/new`, `/clear` (the same: a fresh conversation), `/plan [on|off]`, `/resume ID`,
+`/model NAME`, `/permissions ask|judge|allow`, `/effort low|medium|high|xhigh|max|default`, `/limit TOKENS`, `/compact [focus]`, `/goal` (opens form),
+`/context` (opens Context tab), `/help`. Keyboard: Enter send, Shift+Enter newline, Shift+Tab plan mode on/off, Esc stop (when running), Cmd/Ctrl+K focus
+composer, Cmd/Ctrl+B toggle session list. Files can be attached with the paperclip, pasted, or dropped on the message box.
 
-**Not possible today (do not design as if it were, or flag it as a server ask):** editing files from the UI, attaching files/images, message
+**Not possible today (do not design as if it were, or flag it as a server ask):** editing files from the UI, attaching Office files (convert to PDF), message
 editing or retry/regenerate, branching a conversation, deleting/renaming sessions, switching project, git status/diff/commit, multiple
 simultaneous tasks or tabs-as-sessions, queueing a message while a task runs, per-tool approve-always rules (rules are CLI flags only),
 settings persistence beyond the panel width, notifications, search across sessions, export.
@@ -87,6 +91,9 @@ them**; they are a security feature.
 | `info` | `info` | Settings or counters changed. |
 | `status` | `running` | Task started/ended. Drives Send↔Stop, disabled states, spinner. |
 | `text_delta` | `text` | Streaming assistant markdown, token-ish chunks. Many per second. |
+| `thinking_delta` | `text` | The model's reasoning, as a summary the provider writes (Claude 4.6+ only), streamed before the reply text or a tool call. Plain text, not markdown. |
+| `plan_request` | `id, plan` | Plan mode: the agent's plan (markdown) waiting for approval. Blocks the agent until answered with `answer_plan`; closed by `question_closed`. |
+| `plan_mode` | `on` | Plan mode changed during a task (an approved plan turns it off). |
 | `tool_call` | `id, name, input, display, parallel_group` | A tool is about to run. `display` is a one-line human summary (`read_file(src/a.py)`, `bash(pytest -q)`, `write_file(x.py, 120 chars)`). `input` strings are cut at 4,000 chars. | `parallel_group` is the same id for subagent calls from one reply that run together (else null).
 | `tool_result` | `id, name, text, is_error, outcome, approval, mcp` | Result ≤30,000 chars (keeps head 30% and tail 70%, says it was cut). Errors always say what to try next. A non-zero exit of `bash` is an error that includes the output. | `outcome`: a few server-made words ("612 lines", "3 matches", "exit 1", "new file", "answered: Go") or null. `approval`: `{by: "rule"|"judge"|"user", allowed}` when a risky call was decided, else null. `mcp`: the result came from an MCP server.
 | `subagent_step` / `subagent_finish` | `parent_id, index, display` / `parent_id, index, calls, cost` | A subagent started by tool call `parent_id` took a step / finished (`index` is its [n] when several run together). Replace the `↳` notices in the web UI. |
@@ -98,18 +105,18 @@ them**; they are a security feature.
 | `ask_user` | `id, question, choices[]` | Blocks the agent until answered. ≤10 choices, may be empty (free text). |
 | `question_closed` | `id` | A question was answered, stopped, or timed out: remove it. |
 | `done` | `text, stop_reason, cut_off, interrupted, stopped, error, info` | Task ended. Exactly one of: normal finish, `error`, `interrupted`, `stopped` (a turn/cost limit, a refusal, or **goal not met**), `cut_off` (reply hit max length). Goal results arrive as `text` starting `GOAL DONE` / `GOAL NOT DONE`. |
-| `session_loaded` | `items[], info` | After new/resume: the full transcript (`user`/`assistant`/`summary`/`tool` items; tool results included). | Tool items carry `outcome` too.
+| `session_loaded` | `items[], info` | After new/resume: the full transcript (`user`/`assistant`/`thinking`/`summary`/`tool` items; tool results included). | Tool items carry `outcome` too; user items carry `attachments[{name, kind}]` (names only, never contents).
 | `error` | `message` | Request-level problem (busy, bad input, no key, could not compact). Not a task result. |
 
 ### The `info` object (what is always available)
 `project, model, provider, permissions, effort, limit (compaction tokens), session_id, client_ready (false = no API key), client_error,
 efforts[], models[{id,note}], modes[], mode_help{mode→sentence}, agents_md (bool), skills[names], mcp_tools[names], price_known, cost{usd,complete,note},
-turns (model calls), compactions`.
+turns (model calls), compactions, plan (bool)`.
 
 ### Data NOT available (design must not depend on it without a server change)
 - Per-call history of cost/tokens (only the *last* call's usage and the running total).
 - Structured compaction events (compaction is still text notices; see §6). Subagent and goal progress are structured events (above).
-- Streaming of *thinking*; the model's reasoning is not exposed.
+- The model's raw chain of thought: only the provider's summary is streamed (`thinking_delta`), and none on DeepSeek or older Claude models.
 - A task's elapsed time, token rate, or progress percentage. (Turn count is `info.turns`, cumulative over the session.)
 - Diffs for anything written before this page/session was loaded, or for bash side effects.
 - Which files the agent has read (no event), only written/edited ones.

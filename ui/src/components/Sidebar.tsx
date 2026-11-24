@@ -4,6 +4,7 @@ import { formatCost } from "../lib/lang";
 import type { SessionRow } from "../protocol";
 import { Icon } from "./Icon";
 import { Logo } from "./Logo";
+import { narrowerThan, reducedMotion, usePresence } from "../lib/presence";
 
 const when = (iso: string, today: boolean) =>
   today ? new Date(iso).toLocaleTimeString([], { timeStyle: "short" }) : new Date(iso).toLocaleDateString([], { dateStyle: "medium" });
@@ -28,6 +29,9 @@ function groups(sessions: SessionRow[]) {
 
 export function Sidebar() {
   const open = useStore((s) => s.sidebarOpen);
+  const instant = useStore((s) => s.sidebarInstant);
+  // as a drawer (narrow windows) it slides back out the way it came; docked, by shortcut, or with reduced motion it just goes
+  const { mounted, closing } = usePresence(open, () => narrowerThan(760) && !reducedMotion() && !useStore.getState().sidebarInstant);
   const all = useStore((s) => s.sessions);
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
@@ -39,7 +43,7 @@ export function Sidebar() {
   const resume = useStore((s) => s.resume);
   const compact = useStore((s) => s.compact);
   const patch = useStore((s) => s.patch);
-  if (!open) return null;
+  if (!mounted) return null;
 
   const toggleSearch = () => {
     if (searching) {
@@ -53,11 +57,11 @@ export function Sidebar() {
 
   return (
     <>
-      <div className="backdrop" onClick={() => patch({ sidebarOpen: false })} aria-hidden />
-      <aside className="sidebar" aria-label="Sessions">
+      <div className={`backdrop ${closing ? "closing" : ""}`} onClick={() => patch({ sidebarOpen: false, sidebarInstant: false })} aria-hidden />
+      <aside className={`sidebar ${closing ? "closing" : ""}`} data-instant={instant || undefined} aria-label="Sessions">
         <div className="brand" title={info?.project}>
           <Logo /> <span className="brand-name">{info ? info.project.split("/").pop() : "Mini Harness"}</span>
-          <button className="btn-icon drawer-close" onClick={() => patch({ sidebarOpen: false })} aria-label="Close sessions"><Icon name="close" /></button>
+          <button className="btn-icon drawer-close" onClick={() => patch({ sidebarOpen: false, sidebarInstant: false })} aria-label="Close sessions"><Icon name="close" /></button>
         </div>
         <div className="new-row">
           <button className="new" onClick={newSession} disabled={running}><Icon name="pencil" /> New session <kbd>⌘N</kbd></button>

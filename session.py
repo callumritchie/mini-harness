@@ -57,6 +57,8 @@ class Session:
         self.fresh_compaction = False  # the next call is the first since a compaction
         self.task_start, self.task_reads, self.task_notes = 0, {}, []  # where the task in progress began
         self.ask_human = lambda question, choices: None  # set by the front end; None answer = nobody can answer
+        self.approve_plan = lambda plan: None  # set by the front end: ("approve", None), ("revise", feedback), or None = nobody can answer
+        self.plan_mode = lambda: False  # set by the front end: is plan mode on
         self.run_subagent = None  # set per task by the agent loop
         self.cancel = None  # a threading.Event set by a UI's Stop button; long tools poll it
         self.on_change = None  # called with (path, before, after) when write_file or edit_file changes a file

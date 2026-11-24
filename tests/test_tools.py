@@ -319,6 +319,10 @@ def test_outcome_says_how_a_call_went_from_our_own_result_text():
     assert o("write_file", {}, "Created a.py (3 lines).", False) == "new file"
     assert o("glob", {}, "a.py\nb.py", False) == "2 files" and o("grep", {}, "a.py:1:x", False) == "1 match"
     assert o("grep", {}, "No matches for 'x' in the files that can be searched.", False) == "no matches"
+    # a cut list says how many there are, not how many were listed; a stopped search says it is a lower bound
+    assert o("glob", {}, "a.py\nb.py\n[1198 more not shown. Narrow it.]", False) == "2 of 1,200 files"
+    assert o("glob", {}, "a.py\n[Search stopped after 5000 files: this is only part of what matches. Narrow it.]", False) == "1+ files"
+    assert o("grep", {}, "a.py:1:x\nb.py:2:x\n[Search stopped after 200 matches: this is only part of the results.]", False) == "2+ matches"
     assert o("ask_user", {}, "The user answered: Go", False) == "answered: Go"
     assert o("edit_file", {}, "Edited", False) is None and o("read_file", {}, "nope", True) is None
     assert o("search_docs", {}, "5 passages for 'x' (index: 9 files, ranked by keyword match):", False) == "5 passages"

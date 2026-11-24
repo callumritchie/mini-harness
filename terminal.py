@@ -6,6 +6,7 @@ import shlex
 import sys
 
 import agent
+import attachments
 import context
 import pricing
 import safety
@@ -45,15 +46,47 @@ def ask_in_chat(question, choices):
     return answer
 
 
+def ask_plan(plan):
+    """Show a plan and ask for approval. Returns ("approve", None) or ("revise", what to change)."""
+    discard_pending_input()
+    print("\n  ┌─ Plan to approve")
+    for line in safety.printable(plan).strip().split("\n"):
+        print(f"  │ {line}")
+    try:
+        answer = input("  └─ Approve this plan? [y/N, or type what to change] ").strip()
+    except EOFError:
+        answer = ""
+    if answer.lower() in ("y", "yes"):
+        return "approve", None
+    return "revise", "" if answer.lower() in ("", "n", "no") else answer
+
+
 class TerminalUI(UI):
     def __init__(self):
         self.streamed = False
+        self.thinking_open = False  # a reasoning passage is being printed
+
+    def _end_thinking(self):
+        if self.thinking_open:
+            print(file=sys.stderr)
+            self.thinking_open = False
+
+    def thinking(self, delta):
+        if not self.thinking_open:
+            if self.streamed:
+                print()
+                self.streamed = False
+            print(agent.dim("∴ thinking: "), end="", file=sys.stderr, flush=True)
+            self.thinking_open = True
+        print(agent.dim(safety.printable(delta)), end="", file=sys.stderr, flush=True)
 
     def text(self, delta):
+        self._end_thinking()
         self.streamed = True
         print(safety.printable(delta), end="", flush=True)
 
     def tool_call(self, call_id, name, args, display):
+        self._end_thinking()
         if self.streamed:
             print()
             self.streamed = False
@@ -69,7 +102,15 @@ class TerminalUI(UI):
         return terminal_ask(assessment, note)
 
     def ask_user(self, question, choices):
+        self._end_thinking()
         return ask_in_chat(question, choices)
+
+    def approve_plan(self, plan):
+        self._end_thinking()
+        if self.streamed:
+            print()
+            self.streamed = False
+        return ask_plan(plan)
 
 
 class Chat:
@@ -78,6 +119,7 @@ class Chat:
     def __init__(self, args):
         self.args = args
         self.ui = TerminalUI()
+        self.files = []  # attachments.Attachment queued with /attach, sent with the next message
         self.ctl = Controller(args, self.ui)
         self.ctl.start()
         if self.ctl.client_error:
@@ -85,7 +127,8 @@ class Chat:
 
     def banner(self):
         c, s = self.ctl, self.ctl.session
-        print(f"Mini Harness  model: {c.model}  permissions: {c.permissions.mode}  (/help for commands, Ctrl-C stops a turn, Ctrl-D exits)")
+        plan = "  plan mode: on" if c.permissions.plan else ""
+        print(f"Mini Harness  model: {c.model}  permissions: {c.permissions.mode}{plan}  (/help for commands, Ctrl-C stops a turn, Ctrl-D exits)")
         if context.AGENTS_FILE in s.system_parts:
             print(f"Loaded {context.AGENTS_FILE} ({s.system_parts[context.AGENTS_FILE]:,} characters) into the instructions.")
         if "Skills (names only)" in s.system_parts:
@@ -97,7 +140,7 @@ class Chat:
         self.banner()
         while True:
             try:
-                line = read_message("\n> ").strip()
+                line = read_message("\n" + self.prompt()).strip()
             except EOFError:
                 print()
                 return
@@ -121,6 +164,10 @@ class Chat:
                 continue
             self.guarded(self.task, line)
 
+    def prompt(self):
+        files = f"[{len(self.files)} file{'' if len(self.files) == 1 else 's'}] " if self.files else ""
+        return f"{files}{'plan' if self.ctl.permissions.plan else ''}> "
+
     def guarded(self, fn, arg):
         """Run a command. Ctrl-C and errors end it, not the program."""
         try:
@@ -143,7 +190,9 @@ class Chat:
 
     def task(self, line):
         self.ui.streamed = False
-        result = self.ctl.send(line)
+        files, self.files = self.files, []
+        result = self.ctl.send(line, files)
+        self.ui._end_thinking()
         if not (result.interrupted or result.error or result.stopped):
             print()
         self.report(result)
@@ -161,18 +210,51 @@ class Chat:
             "/context             what fills the context window, and what the session has cost",
             "/compact [focus]     replace the conversation with a summary now",
             "/limit [tokens]      show or set where automatic compaction starts",
+            "/plan [on|off]       plan mode: read-only until you approve the agent's plan (no argument: switch)",
+            "/attach [PATH|clear] attach an image, PDF or text file to your next message (no argument: list them)",
             "/index [--rebuild] [--embed]   update the document index and graph now; --embed turns on search by meaning",
             "/graph [status|build]  the knowledge graph; build has a model read the prose (shows the cost first)",
             "/goal [--verify CMD] [--max-turns N] TEXT   work unattended until done, with evidence, your check and a review",
+            "/clear               clear the conversation and start fresh (the old one stays in /sessions)",
             "/help                this list",
             "/exit                quit (Ctrl-D too)"]))
 
     def cmd_new(self, arg):
         self.ctl.new_session()
+        self.files = []
         print("Started a new session.")
         self.banner()
 
-    cmd_clear = cmd_new
+    def cmd_clear(self, arg):
+        self.ctl.new_session()
+        self.files = []
+        print("\033[2J\033[H" if sys.stdout.isatty() else "", end="")  # clear the screen too, like Claude Code
+        print("Cleared: a fresh conversation. The old one is in /sessions.")
+        self.banner()
+
+    def cmd_plan(self, arg):
+        if arg not in ("", "on", "off"):
+            print("Usage: /plan, /plan on or /plan off.")
+            return
+        on = not self.ctl.permissions.plan if not arg else arg == "on"
+        print(self.ctl.set_plan(on))
+
+    def cmd_attach(self, arg):
+        if arg == "clear":
+            self.files = []
+            print("No files attached.")
+            return
+        if arg:
+            item = attachments.from_path(os.path.expanduser(arg.strip("'\"")))
+            attachments.check_batch(self.files + [item])
+            self.files.append(item)
+        if not self.files:
+            print("No files attached. Use /attach PATH (images, PDFs, text and code files).")
+            return
+        print("Attached to your next message:")
+        for f in self.files:
+            print(f"  {f.name}  ({f.kind}, {f.size:,} bytes)")
+        print("Type your message to send them, or /attach clear.")
 
     def cmd_sessions(self, arg):
         listing = self.ctl.list_sessions()

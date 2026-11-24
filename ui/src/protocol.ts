@@ -29,7 +29,22 @@ export interface Info {
   cost: CostSummary;
   turns: number;
   compactions: number;
+  plan?: boolean; // plan mode: read-only until a plan is approved
   index?: IndexStatus;
+}
+
+export type AttachmentKind = "image" | "pdf" | "text";
+
+/** A file attached to a message: names and kinds only (the server never sends a file's contents back). */
+export interface AttachmentRef {
+  name: string;
+  kind: AttachmentKind;
+}
+
+/** What POST /api/attachments returns: the file is on the server, waiting for a message to take it by id. */
+export interface Uploaded extends AttachmentRef {
+  id: string;
+  size: number;
 }
 
 /** The document index behind search_docs and explore_graph, as the server reports it. */
@@ -126,6 +141,9 @@ export type ServerEvent =
   | { type: "info"; info: Info }
   | { type: "status"; running: boolean }
   | { type: "text_delta"; text: string }
+  | { type: "thinking_delta"; text: string } // the model's reasoning (a summary), as it streams
+  | { type: "plan_request"; id: string; plan: string }
+  | { type: "plan_mode"; on: boolean } // plan mode changed during a task (an approved plan turns it off)
   | { type: "tool_call"; id: string; name: string; input: Record<string, unknown>; display: string; parallel_group?: string | null }
   | {
       type: "tool_result";
@@ -178,16 +196,19 @@ export type ServerEvent =
   | { type: "error"; message: string };
 
 export type TranscriptItem =
-  | { kind: "user"; text: string }
+  | { kind: "user"; text: string; attachments?: AttachmentRef[] }
   | { kind: "assistant"; text: string }
+  | { kind: "thinking"; text: string }
   | { kind: "summary"; text: string }
   | { kind: "tool"; id: string; name: string; input: Record<string, unknown>; result: string | null; is_error: boolean; outcome?: string | null; sources?: Source[]; graph?: GraphResult };
 
 export type ClientRequest =
-  | { type: "send"; text: string }
+  | { type: "send"; text: string; attachments?: string[] }
   | { type: "cancel" }
   | { type: "answer_permission"; id: string; allow: boolean }
   | { type: "answer_ask"; id: string; answer: string | null }
+  | { type: "answer_plan"; id: string; approve: boolean; feedback?: string }
+  | { type: "set_plan"; on: boolean }
   | { type: "set_model"; model: string }
   | { type: "set_permissions"; mode: Mode }
   | { type: "set_effort"; effort: string | null }

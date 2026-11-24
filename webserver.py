@@ -10,22 +10,27 @@ import os
 import secrets
 import tempfile
 import threading
+import urllib.parse
 import webbrowser
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+import attachments
 import graph
 import rag
 import safety
 import sessionlog
 import tools
 from controller import Controller, UI
+from session import UserError
 
 MAX_FILE_BYTES = 400_000
 MAX_TREE_ENTRIES = 5000
 MAX_STRING = 4000  # long strings in tool input are cut for display (the whole content is in the file change)
+MAX_UPLOAD_BYTES = max(attachments.MAX_IMAGE_BYTES, attachments.MAX_PDF_BYTES, attachments.MAX_TEXT_CHARS * 4)
+MAX_PENDING_UPLOAD_BYTES = 60_000_000  # uploaded files waiting to be sent, in all
 DIST = Path(__file__).resolve().parent / "ui" / "dist"
 HIDDEN_DIRS = {".git"} | tools.SKIP_DIRS
 
@@ -78,6 +83,24 @@ class WebUI(UI):
         self.controller = None
         self.calls = {}  # call id -> (name, args): what a result needs to describe itself
         self.groups = {}  # call id -> the parallel group it belongs to (the first call's id)
+        self.uploads = {}  # attachment id -> attachments.Attachment, uploaded and waiting to be sent with a message
+
+    def upload(self, item):
+        """Keep an uploaded file until a message takes it. Returns its id, or raises UserError when too much is waiting."""
+        with self.lock:
+            if sum(a.size for a in self.uploads.values()) + item.size > MAX_PENDING_UPLOAD_BYTES:
+                raise UserError("Too many files are waiting to be sent. Send or remove some first.")
+            uid = secrets.token_hex(8)
+            self.uploads[uid] = item
+        return uid
+
+    def take_uploads(self, ids):
+        """The files for a message, in order; they are forgotten once taken. Raises UserError for an id that is not waiting."""
+        with self.lock:
+            missing = [i for i in ids if i not in self.uploads]
+            if missing:
+                raise UserError("An attached file is no longer on the server (it may have been sent already). Attach it again.")
+            return [self.uploads.pop(i) for i in ids]
 
     # --- connection ---
 
@@ -85,9 +108,11 @@ class WebUI(UI):
         with self.lock:
             self.loop, self.queue = loop, queue
 
-    def detach(self):
+    def detach(self, queue):
+        """Stop sending to this page, unless a newer one has taken over (a refresh opens the new socket before the old one closes)."""
         with self.lock:
-            self.loop = self.queue = None
+            if self.queue is queue:
+                self.loop = self.queue = None
 
     def emit(self, type_, **data):
         event = {"type": type_, **data}
@@ -100,6 +125,9 @@ class WebUI(UI):
 
     def text(self, delta):
         self.emit("text_delta", text=safety.printable(delta))
+
+    def thinking(self, delta):
+        self.emit("thinking_delta", text=safety.printable(delta))
 
     def parallel(self, call_ids):
         with self.lock:
@@ -174,6 +202,15 @@ class WebUI(UI):
         answer = self._ask({"type": "ask_user", "id": secrets.token_hex(6), "question": safety.printable(question),
                             "choices": [safety.printable(c) for c in choices]})
         return answer if isinstance(answer, str) else None
+
+    def approve_plan(self, plan):
+        answer = self._ask({"type": "plan_request", "id": secrets.token_hex(6), "plan": clean(plan, 20000)})
+        if not isinstance(answer, dict):
+            return None
+        if answer.get("approve") is True:  # only an explicit true approves
+            return "approve", None
+        feedback = answer.get("feedback")
+        return "revise", feedback if isinstance(feedback, str) else ""
 
     def answer(self, qid, value):
         with self.lock:
@@ -309,6 +346,23 @@ def create_app(controller, webui, token, port, dev_origins=()):
     def context_data():
         return controller.context_data()
 
+    @app.post("/api/attachments")
+    async def upload(request: Request):
+        """One file, as the raw request body; its name in X-Filename (URI-encoded) and its type in Content-Type. It waits on the
+        server until a message is sent with its id."""
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"That file is too large (at most {MAX_UPLOAD_BYTES // 1_000_000} MB).")
+        data = await request.body()
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"That file is too large (at most {MAX_UPLOAD_BYTES // 1_000_000} MB).")
+        name = urllib.parse.unquote(request.headers.get("x-filename", "file"))
+        try:
+            item = attachments.classify(name, request.headers.get("content-type", ""), data)
+            uid = webui.upload(item)
+        except UserError as e:
+            raise HTTPException(400, str(e))
+        return {"id": uid, "name": clean(item.name, 200), "kind": item.kind, "size": item.size}
     @app.get("/api/index")
     def index_status():
         return controller.index_status()
@@ -337,8 +391,8 @@ def create_app(controller, webui, token, port, dev_origins=()):
         webui.emit("done", text=result.text, stop_reason=result.stop_reason, cut_off=result.cut_off, interrupted=result.interrupted,
                    stopped=result.stopped, error=result.error, info=controller.info())
 
-    def do_send(text):
-        finish(controller.send(text))
+    def do_send(text, files):
+        finish(controller.send(text, files))
 
     def do_goal(text, verify, max_turns):
         finish(controller.goal(text, verify, max_turns))
@@ -368,6 +422,8 @@ def create_app(controller, webui, token, port, dev_origins=()):
 
     def load_session():
         webui.changes.clear()
+        with webui.lock:
+            webui.uploads.clear()
         webui.emit("session_loaded", items=transcript_for(controller.session.id) if controller.session.messages else [], info=controller.info())
 
     def handle(msg):
@@ -376,11 +432,18 @@ def create_app(controller, webui, token, port, dev_origins=()):
         busy = webui.running
         if kind == "send":
             text = msg.get("text")
-            if not isinstance(text, str) or not text.strip():
+            ids = msg.get("attachments") or []
+            if not isinstance(text, str) or not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+                return webui.emit("error", message="Type something to send.")
+            if not text.strip() and not ids:
                 return webui.emit("error", message="Type something to send.")
             if busy:
                 return webui.emit("error", message="A task is already running. Stop it first.")
-            run_in_thread(do_send, text)
+            try:
+                files = webui.take_uploads(ids)
+            except UserError as e:
+                return webui.emit("error", message=str(e))
+            run_in_thread(do_send, text, files)
         elif kind == "goal":
             if busy:
                 return webui.emit("error", message="A task is already running. Stop it first.")
@@ -391,9 +454,13 @@ def create_app(controller, webui, token, port, dev_origins=()):
             webui.answer(msg.get("id"), msg.get("allow") is True)
         elif kind == "answer_ask":
             webui.answer(msg.get("id"), msg.get("answer") if isinstance(msg.get("answer"), str) else None)
-        elif kind in ("set_model", "set_permissions", "set_effort", "set_limit"):
+        elif kind == "answer_plan":
+            webui.answer(msg.get("id"), {"approve": msg.get("approve") is True, "feedback": msg.get("feedback") if isinstance(msg.get("feedback"), str) else ""})
+        elif kind in ("set_model", "set_permissions", "set_effort", "set_limit", "set_plan"):
             try:
-                if kind == "set_model":
+                if kind == "set_plan":
+                    webui.emit("notice", text=controller.set_plan(msg.get("on") is True))
+                elif kind == "set_model":
                     note = controller.set_model(str(msg.get("model", "")))
                     if note:
                         webui.emit("notice", text=note)
@@ -466,7 +533,7 @@ def create_app(controller, webui, token, port, dev_origins=()):
             pass
         finally:
             send_task.cancel()
-            webui.detach()  # a running task carries on; unanswered questions wait for a reconnect or Stop
+            webui.detach(queue)  # a running task carries on; unanswered questions wait for a reconnect or Stop
 
     # ---------- the built UI ----------
 

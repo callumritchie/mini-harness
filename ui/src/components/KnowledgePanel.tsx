@@ -79,7 +79,7 @@ export function KnowledgePanel() {
         <h3>Search by meaning <span className="chip">{meaning}</span></h3>
         {status.embedding && (
           <div className="k-progress" role="progressbar" aria-valuemin={0} aria-valuemax={status.embedding.total} aria-valuenow={status.embedding.done}>
-            <span style={{ width: `${Math.round((100 * status.embedding.done) / Math.max(1, status.embedding.total))}%` }} />
+            <span style={{ transform: `scaleX(${status.embedding.done / Math.max(1, status.embedding.total)})` }} />
           </div>
         )}
         {!status.embed_installed && (

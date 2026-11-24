@@ -7,6 +7,7 @@ import { AskCard } from "./AskCard";
 import { GoalCard } from "./GoalCard";
 import { Logo } from "./Logo";
 import { Message } from "./Message";
+import { PlanCard } from "./PlanCard";
 import { ToolGroup } from "./ToolGroup";
 import { Welcome } from "./Welcome";
 import { permissionTitle } from "../lib/lang";
@@ -25,6 +26,7 @@ export function Chat() {
   const items = useStore((s) => s.items);
   const running = useStore((s) => s.running);
   const ask = useStore((s) => s.ask);
+  const plan = useStore((s) => s.plan);
   const permission = useStore((s) => s.permission);
   const box = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -36,7 +38,7 @@ export function Chat() {
   useEffect(() => {
     const el = box.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [items, ask, running]);
+  }, [items, ask, plan, running]);
 
   const onScroll = () => {
     const el = box.current;
@@ -45,7 +47,8 @@ export function Chat() {
 
   const isUser = (e: Entry | undefined) => !e || (e.kind !== "group" && e.kind === "user");
   const last = entries[entries.length - 1];
-  const working = running && !ask && items[items.length - 1]?.kind !== "assistant";
+  const lastKind = items[items.length - 1]?.kind;
+  const working = running && !ask && !plan && lastKind !== "assistant" && lastKind !== "thinking";
 
   return (
     <div className="chat" ref={box} onScroll={onScroll} role="log" aria-live="polite">
@@ -72,6 +75,7 @@ export function Chat() {
           </AgentRow>
         ) : working && <AgentRow first={isUser(last)}><div className="thinking">Working…</div></AgentRow>}
         <AskCard />
+        <PlanCard />
       </div>
     </div>
   );

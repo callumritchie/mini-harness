@@ -74,9 +74,13 @@ DeepSeek is reached through its Anthropic-compatible endpoint (`https://api.deep
    `deepseek-flash` and `deepseek-v4-pro`, not `deepseek-chat`; `deepseek-flash` is untested live.)
 6. **Key handling.** Environment variables only. No `.env` file, no config file, never printed. A missing key gives
    setup instructions. Not supported: `ant auth login` OAuth profiles.
-7. **Model parameters.** We send no `thinking`, `temperature` or `tool_choice`: current Claude models think adaptively
-   by default and reject the old options. `max_tokens` is 32000 (Anthropic) / 8192 (DeepSeek).
-8. **Tools** (`tools.py`): `read_file`, `write_file`, `edit_file`, `bash`, `glob`, `grep`, `ask_user`, `subagent`, the
+7. **Model parameters.** We send no `temperature` or `tool_choice`: current Claude models reject them. On Claude 4.6 and
+   later (`shows_thinking`) we send `thinking: {type: "adaptive", display: "summarized"}`: those models think adaptively
+   anyway, but their default display is `"omitted"` (empty thinking blocks, a silent pause); `"summarized"` returns a
+   readable summary of the reasoning, which streams to the front end (`on_thinking`: dim in the terminal, a fold above the
+   reply in the web UI). Thinking costs the same either way. Older Claude models and DeepSeek get no `thinking` field.
+   `max_tokens` is 32000 (Anthropic) / 8192 (DeepSeek).
+8. **Tools** (`tools.py`): `read_file`, `write_file`, `edit_file`, `bash`, `glob`, `grep`, `ask_user`, `subagent`, `exit_plan_mode`, the
    provider's web search, and any MCP tools. See "Tool patterns" below.
 9. **Permissions: a policy, a gate, an optional judge** (see "Safety" and "The permission judge"). Safe things run;
    risky things are shown exactly and asked yes/no; headless denies them and says how to pre-approve (`--allow`).
@@ -499,6 +503,44 @@ the tool says so, and tells the model to choose the most reasonable option, carr
 assumed it, and what**. The manual says to use it only when a missing detail really changes the work, one question at a
 time, and not for permission, for things it can look up, or to chat.
 
+## Plan mode
+
+A switch on top of the permission mode (`Permissions.plan`), like Claude Code's: `/plan` or `--plan` in the terminal, the Plan
+button or Shift+Tab in the web UI. While it is on, `Permissions.decide` refuses everything except `read_file`, `glob`, `grep`,
+`ask_user`, `subagent`, `exit_plan_mode` and `bash` commands the policy finds read-only, **whatever the permission mode** (Allow
+does not lift it). The refusal tells the model to keep exploring and call `exit_plan_mode`. MCP tools are refused: what they do
+is not known.
+
+- **The model is told by a note**, not by changing the system prompt or the tool list (both stay byte-for-byte the same, so the
+  cache holds): switching plan mode adds "Plan mode is on…" / "…off" to `session.notes`, which goes at the end of the next
+  message. A new or resumed session gets the note again while plan mode is on. `exit_plan_mode` is always in the tool list;
+  outside plan mode it is refused.
+- **`exit_plan_mode(plan)`** asks the person through `session.approve_plan` (a front-end hook, like `ask_human`): the terminal
+  prints the plan and asks `[y/N, or type what to change]`; the web UI shows it as a card with *Approve and start* and *Keep
+  planning…*. Approving turns plan mode off at once (the controller does it before the tool returns), so the same task carries
+  the plan out; asking for changes sends the feedback back and plan mode stays on. Only an explicit yes approves.
+- **Headless** (`-p "…" --plan`): nobody can approve, so the tool says so and the run's answer is the plan; nothing changes.
+  Goal mode refuses to start while plan mode is on (it has to change files), and `--plan --goal` is an error.
+
+## Attachments
+
+Images (PNG, JPEG, GIF, WebP, ≤5 MB), PDFs (≤20 MB) and text or code files (UTF-8, ≤400k characters) can go with a message:
+the paperclip, a paste or a drop in the web UI; `/attach PATH` in the terminal (`/attach` lists them, `/attach clear` empties
+the list). `attachments.classify` decides what a file is and refuses anything else (Office files, other image types, binaries)
+with a sentence saying what to do instead. At most 10 files and 30 MB per message.
+
+- **What the model gets** (`attachments.to_blocks`): for each file a label `[Attached file: name]`, then an `image` block, a
+  base64 `document` block (PDF) or a text block `<file name="…">…</file>`; the typed text comes last, after the files, as the
+  API recommends. DeepSeek cannot read images or PDFs: those are refused there; text files work everywhere.
+- **The judge never reads attachments**: `user_messages` (what it may read) holds only the typed text. Session titles and the
+  transcript show file names, never contents (`sessionlog._text_of` and `render_messages` skip labels and file blocks).
+- **The log keeps the files** (base64, in the `user` event), because `-c` and resume must send the same conversation again.
+  A session with large attachments has a large log. `/context` counts an image as ~1,600 tokens and a PDF by size, not by the
+  length of its base64.
+- **The web upload** is `POST /api/attachments` with the file as the raw body (no multipart library), behind the same token,
+  Host and Origin checks as every other route. The file waits in memory (at most 60 MB in all) until a `send` names its id; it
+  is used once, and a new or resumed session drops whatever is waiting.
+
 ## Subagents
 
 `subagent(task)` runs the same loop in a **fresh, empty conversation** and returns only its **final answer**.
@@ -601,10 +643,12 @@ also print a JSON line with `error` set. Goal runs add a `goal` object (`done`, 
 
 ## Sessions and exit codes
 
-**Chat commands:** `/new` (a new session and log; `/clear` is the same), `/sessions` (this folder's sessions, newest first,
+**Chat commands:** `/new` (a new session and log), `/clear` (the same, and in the terminal it also clears the screen; the old
+session stays in `/sessions`), `/sessions` (this folder's sessions, newest first,
 titled by their first prompt, with prompt count and cost; sessions nobody has said anything in are left out, except the current
 one), `/resume [n|id]` (continue the numbered or id-prefixed session from the list; no argument: the most recent *other*
-one), `/help`, `/exit`. `-c` continues the most recent session that has a prompt in it.
+one), `/plan [on|off]` (see "Plan mode"), `/attach [PATH|clear]` (see "Attachments"), `/help`, `/exit`. `-c` continues the
+most recent session that has a prompt in it.
 
 **Exit codes (headless):** 0 done; 1 error (no key, unknown model, bad arguments, API error); 3 did not finish (turn or spending
 limit, cut-off or refused reply, goal not met); 130 interrupted. Argument-parsing errors exit 2 (argparse).
@@ -673,6 +717,65 @@ the model name, then the DEMO badge); model and effort live in a Settings popove
 safety control. The empty chat offers starter prompts that only fill the message box. Code blocks have a Copy button. The side panel is
 resizable (width kept in localStorage). Below 1100px the side panel, and below 760px the session list too, become drawers. Shortcuts:
 Cmd/Ctrl+K focuses the message box, Cmd/Ctrl+B toggles the session list. Behaviour and protocol are unchanged.
+
+## Web UI rules
+
+Rules for anyone (person or agent) building or changing the web UI. Each one came from a decision made while reviewing the UI; the
+comment after it has the date and what was said. Values and tokens live in `ui/src/styles.css`.
+
+### Layout & data
+
+- **Paths always show the file name first and the folder after it, dimmed; the folder gives way first, and the full path is in the
+  tooltip.** Use `PathLabel` (`ui/src/components/PathLabel.tsx`); file tool rows do the same through `ToolDisplay` in `ToolCard.tsx`.
+  Never end-truncate a path.
+  Why: deep projects share the start of their paths, so the end is what tells files apart.
+  <!-- 2026-11-24: "I take your recommendation on the 'decisions for you'" (file name first, folder after, dimmed) -->
+- **Nothing in a reply may make the chat scroll sideways.** Wide content scrolls in its own box (tables are wrapped in `.table-wrap`), prose
+  wraps (`.markdown { overflow-wrap: break-word }`), and numbers in a table never wrap. The approval dialog wraps commands at word
+  boundaries (`overflow-wrap: anywhere`), never `word-break: break-all`.
+  Why: one wide table used to pan the whole conversation, and mid-word breaks made the command you are approving hard to read.
+  <!-- 2026-11-24: "I take your recommendation" (a wide table scrolls in its own box) -->
+- **When the top bar runs out of room, the project name goes before the session title** (it hides at a chat width of 720px or less).
+  Why: the sidebar already shows the project; the top bar is the only place the session is named.
+  <!-- 2026-11-24: "I take your recommendation" (hide the project name when space runs out) -->
+- **A cut or capped count states both numbers: "200 of 1,200 files", and "200+ matches" when a search stopped early. A new file shows only
+  `+N`, never `−0`.** Counts come from `tools.outcome`; tested in `tests/test_tools.py`.
+  Why: a count of what was shown, presented as the total, is wrong data.
+  <!-- 2026-11-24: "I take your recommendation" ("200 of 1,200 files") -->
+- **Before shipping a UI change, look at it with the dev data toggle on Worst case** (Vite dev server + `--demo`; bottom of the page;
+  `?data=worst`). Demo data is chosen, without anyone noticing, to make a design look good.
+  <!-- 2026-11-24: confirmed ("all + your recommendations") -->
+
+### Motion
+
+- **Keyboard-initiated actions never animate:** Cmd/Ctrl+B, Cmd/Ctrl+N, the `/` palette, Shift+Tab. A drawer opened with Cmd+B gets
+  `data-instant` (store: `sidebarInstant`). **Also instant:** tool card expand, chat messages and tool rows arriving, the side panel's
+  tab switch, and tooltips (native `title`).
+  Why: these happen dozens or hundreds of times a session; motion there makes the app feel slow. A resumed session also mounts every
+  message at once, so an entry animation would replay everywhere.
+  <!-- 2026-11-24: "fix all six" (no animation on Cmd+B); the instant list confirmed ("all + your recommendations") -->
+- **Motion uses the tokens and only `transform` and `opacity`:** press `scale(0.97)`, 100ms in (`--dur-snap`) and 160ms back
+  (`--dur-press`); menus 150ms from their trigger (`transform-origin: top right`); dialogs 200ms from `scale(0.96)`, centred; cards that
+  wait for you (ask, plan, goal) 200ms over 6px; drawers 280ms in (`--ease-drawer`) and 200ms out by the same edge (`usePresence`).
+  Exits are faster than entries or instant. Easing is `--ease-out` for anything entering or responding and `--ease-in-out` for a value
+  changing on screen; never `ease-in`, never `transition: all`, never a layout property. Entries use `@starting-style`.
+  Why: one crisp, consistent motion language; `transform` and `opacity` run on the compositor, so they stay smooth while a reply streams.
+  Checked by `ui/tests/motion.test.ts`.
+  <!-- 2026-11-24: "yes" (polish pass), "all 4" (card and drawer entries), "fix all six" (review fixes) -->
+- **Reduced motion keeps the fades and drops all movement and scaling. The spinner breathes (opacity) instead of freezing.**
+  Why: a frozen spinner reads as stuck.
+  <!-- 2026-11-24: "fix all six" -->
+
+### Performance
+
+- **Streaming text never re-renders the whole message per word.** Streamed deltas are applied once per animation frame
+  (`createBatcher` in `ui/src/lib/stream.ts`), and a streaming message renders block by block with finished blocks memoised
+  (`splitBlocks`); a finished message renders whole. Re-measure with the demo's `long code` keyword.
+  Why: re-rendering per word measured p95 117ms and worst 232ms frames on a fast laptop (after: p95 17ms, worst 50ms).
+  <!-- 2026-11-24: "yes, apply 1 and 2 and re-measure" -->
+- **Code stays highlighted while it streams.**
+  Why: batching and memoised blocks were enough, and highlighting late would make code change colour while you read it.
+  <!-- 2026-11-24: chose fixes 1 and 2, not 3 (defer highlighting); confirmed ("all + your recommendations") -->
 
 ## Tool patterns
 

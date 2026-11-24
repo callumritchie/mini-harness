@@ -8,6 +8,7 @@ import { ToolCard } from "./ToolCard";
 import { Spinner } from "./Spinner";
 import { Icon, type IconName } from "./Icon";
 import { Marker } from "./GoalCard";
+import { Thinking } from "./Thinking";
 
 const ENDING: Record<"stopped" | "unfinished" | "cutoff", { icon: IconName; next: React.ReactNode }> = {
   stopped: { icon: "stop", next: "Files already written stay on disk." },
@@ -60,15 +61,29 @@ export function Message({ item, compacting, span }: { item: Item; compacting?: b
       return (
         <div className="msg user">
           <span className="avatar" aria-hidden><Icon name="user" size={12} /></span>
-          <div className="bubble">{item.text}</div>
+          <div className="bubble">
+            {item.attachments && item.attachments.length > 0 && (
+              <ul className="sent-files" aria-label="Attached files">
+                {item.attachments.map((f, i) => (
+                  <li key={i} className={`file-chip ${f.preview ? "has-thumb" : ""}`} title={f.name}>
+                    {f.preview ? <img src={f.preview} alt="" /> : <Icon name={f.kind === "image" ? "image" : "file"} />}
+                    <span className="file-name">{f.name}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {item.text}
+          </div>
         </div>
       );
+    case "thinking":
+      return <Thinking item={item} />;
     case "assistant": {
       if (!item.streaming && item.text.startsWith("GOAL")) return <GoalOutcome item={item} span={span} />;
       return (
         <div className="msg assistant">
           <div className="body">
-            <Markdown text={item.text} />
+            <Markdown text={item.text} streaming={item.streaming} />
             {item.streaming && <span className="cursor" aria-hidden />}
           </div>
         </div>

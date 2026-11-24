@@ -20,5 +20,5 @@ rag = ["fastembed>=0.5", "numpy>=1.24"]  # the local embedding model for search 
 mini-harness = "agent:main"
 
 [tool.setuptools]
-py-modules = ["agent", "compaction", "context", "controller", "demo", "embed", "goal", "graph", "judge", "mcp", "permissions", "pricing",
-              "rag", "safety", "session", "sessionlog", "skills", "terminal", "tools", "webserver"]
+py-modules = ["agent", "attachments", "compaction", "context", "controller", "demo", "embed", "goal", "graph", "judge", "mcp", "permissions",
+              "pricing", "rag", "safety", "session", "sessionlog", "skills", "terminal", "tools", "webserver"]

@@ -5,6 +5,7 @@ import type { TreeNode } from "../protocol";
 import { useStore } from "../store";
 import { CodeLine } from "./Code";
 import { Icon, type IconName } from "./Icon";
+import { PathLabel } from "./PathLabel";
 
 type Changes = ReturnType<typeof useStore.getState>["changes"];
 
@@ -86,7 +87,7 @@ function Viewer({ path, onBack }: { path: string; onBack: () => void }) {
     <div className="viewer">
       <div className="viewer-head">
         <button className="btn-icon back" onClick={onBack} aria-label="Back to files" title="Back to files"><Icon name="back" /></button>
-        <span className="path">{path}</span>
+        <PathLabel path={path} className="path" />
         {state.content !== undefined && <span className="vmeta">{lines.length.toLocaleString()} line{lines.length === 1 ? "" : "s"}</span>}
         {state.content !== undefined && <button className="btn btn-xs" onClick={toggleWrap} aria-pressed={wrap} title="Wrap long lines">Wrap</button>}
         {changed && <button className="btn btn-sm" onClick={() => patch({ rightTab: "changes", selectedChange: path })}>See changes</button>}

@@ -6,6 +6,8 @@ import { Icon } from "./Icon";
 import { ToolIcon } from "./ToolIcon";
 import { Spinner } from "./Spinner";
 import { DiffRows } from "./DiffView";
+import { Markdown } from "./Markdown";
+import { splitPath } from "./PathLabel";
 import { Sources } from "./Sources";
 import { GraphCard } from "./GraphCard";
 
@@ -20,6 +22,23 @@ function waitingId(items: Item[], toolId: string | null | undefined): string | n
     if (it.kind === "tool" && it.status === "running") return it.id;
   }
   return null;
+}
+
+const FILE_TOOLS = new Set(["read_file", "write_file", "edit_file"]);
+
+/** The call's one-line summary. For a file tool in a folder, the path in it is shown by its file name, with the folder after the
+ *  call and dimmed ("write_file(c.json, 12 chars)  src/a/b"): deep paths share their start, so the end is what tells calls apart. */
+export function ToolDisplay({ display, name, path }: { display: string; name: string; path: string | null }) {
+  const at = path && FILE_TOOLS.has(name) ? display.indexOf(`(${path}`) : -1;
+  const { dir, base } = path ? splitPath(path) : { dir: "", base: "" };
+  if (at < 0 || !dir) return <span className="tool-display" title={display}><span className="td-main">{display}</span></span>;
+  const start = at + 1;
+  return (
+    <span className="tool-display" title={display}>
+      <span className="td-main">{display.slice(0, start)}{base}{display.slice(start + path!.length)}</span>
+      <span className="sr-only">, in </span><span className="td-dir">{dir}</span>
+    </span>
+  );
 }
 
 export function ToolCard({ item }: { item: ToolItem }) {
@@ -39,6 +58,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
   const shown = more || result.length <= LIMIT ? result : result.slice(0, LIMIT);
   const mcp = item.mcp || result.startsWith(MCP_MARK);
   const command = item.name === "bash" && typeof item.input.command === "string" ? item.input.command : null;
+  const plan = item.name === "exit_plan_mode" && typeof item.input.plan === "string" ? item.input.plan : null;
   // the result text is written for the model; the row's summary is written for the person
   const nextStep = item.isError && !item.denied ? result.split("\n").find((l) => l.trim()) ?? "" : "";
 
@@ -55,7 +75,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
   else if (item.status === "running") outcome = <span className="tool-meta">running</span>;
   else {
     const meta = stats && !item.isError
-      ? <span className="tool-outcome"><span className="add">+{stats.added}</span> <span className="del">−{stats.removed}</span></span>
+      ? <span className="tool-outcome"><span className="add">+{stats.added}</span>{change?.before !== null && <> <span className="del">−{stats.removed}</span></>}</span>
       : item.outcome ? <span className={`tool-meta ${item.isError ? "bad" : ""}`}>{item.outcome}</span>
       : item.isError ? <span className="tool-meta bad">failed</span> : null;
     const who = item.approval?.allowed ? { user: "you allowed", judge: "judge allowed", rule: "allowed by rule" }[item.approval.by] : null;
@@ -76,7 +96,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
             : <span className="st ok" role="img" aria-label="done">✓</span>}
         </span>
         <ToolIcon name={item.name} />
-        <span className="tool-display">{item.display}</span>
+        <ToolDisplay display={item.display} name={item.name} path={path} />
         <span className="tool-right">{outcome}</span>
         <Icon name={open ? "chevron-down" : "chevron-right"} size={12} className="chev" />
       </button>
@@ -85,6 +105,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
       {open && (
         <div className="tool-body">
           {command !== null && <pre className="tool-cmd"><span className="muted">$ </span>{command}</pre>}
+          {plan !== null && <div className="tool-plan"><Markdown text={plan} /></div>}
           {rows && !item.isError && (
             <div className="diff tool-diff" aria-label={`What this call changed in ${path}`}>
               <DiffRows rows={rows} wrap headers={false} />

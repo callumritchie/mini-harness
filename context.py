@@ -80,6 +80,10 @@ def build_system(model, cwd=None, kind="agent"):
 
 # ---------- /context ----------
 
+IMAGE_TOKENS = 1_600  # about what one full-size image costs
+PDF_BYTES_PER_TOKEN = 50  # a rough average for PDFs (each page is read as text and as an image)
+
+
 def _tokens(chars):
     return round(chars / 4)  # rough: about 4 characters per token
 
@@ -95,6 +99,10 @@ def _block_chars(block):
         return "calls", len(name) + len(json.dumps(args, default=str))
     if kind == "compaction":
         return "summary", len(block.get("content") or "" if isinstance(block, dict) else getattr(block, "content", "") or "")
+    if kind in ("image", "document") and isinstance(block, dict):  # an attached file: a rough size, never the length of its base64
+        if kind == "image":
+            return "files", IMAGE_TOKENS * 4
+        return "files", len((block.get("source") or {}).get("data") or "") * 3 // 4 // PDF_BYTES_PER_TOKEN * 4
     if kind == "tool_result":
         content = block["content"]
         return "results", len(content if isinstance(content, str) else json.dumps(content, default=str))
@@ -103,9 +111,10 @@ def _block_chars(block):
 
 
 def message_chars(messages):
-    totals = {"Compaction summary": 0, "Your messages": 0, "Model replies (text)": 0, "Tool calls": 0, "Tool results": 0, "Search & server results": 0}
+    totals = {"Compaction summary": 0, "Your messages": 0, "Attached files": 0, "Model replies (text)": 0, "Tool calls": 0, "Tool results": 0,
+              "Search & server results": 0}
     labels = {"text": None, "calls": "Tool calls", "results": "Tool results", "server": "Search & server results",
-              "summary": "Compaction summary"}
+              "summary": "Compaction summary", "files": "Attached files"}
     for m in messages:
         if isinstance(m["content"], str):
             is_summary = m["role"] == "user" and m["content"].startswith(SUMMARY_MARK)

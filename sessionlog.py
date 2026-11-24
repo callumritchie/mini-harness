@@ -38,10 +38,24 @@ def latest_path(cwd, exclude=None):
     return max(logs, key=lambda p: p.stat().st_mtime_ns) if logs else None
 
 
+ATTACH_LABEL = "[Attached file: "  # the text block before each attached file (attachments.py): the model sees the name, UIs find files by it
+
+
+def is_attach_label(text):
+    return text.startswith(ATTACH_LABEL) and text.endswith("]") and "\n" not in text
+
+
+def is_attached_text(text):
+    """An attached text file, as it is sent: <file name="...">...</file>."""
+    return text.startswith('<file name="') and text.endswith("\n</file>")
+
+
 def _text_of(content):
+    """What the person typed in a user message: its first text block that is not an attached file or a label."""
     if isinstance(content, str):
         return content
-    return next((b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"), "")
+    return next((b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+                 and not is_attach_label(b.get("text", "")) and not is_attached_text(b.get("text", ""))), "")
 
 
 def list_sessions(cwd, limit=20, include=None):
@@ -56,7 +70,7 @@ def list_sessions(cwd, limit=20, include=None):
         users = [_text_of(e["content"]) for e in events if e.get("type") == "user"]
         if not users and path != include:
             continue
-        title = " ".join((users[0] if users else "(no prompt yet)").split())
+        title = " ".join((users[0] if users else "(no prompt yet)").split()) or "(attached files)"
         cost = sum((e.get("cost") or {}).get("usd") or 0 for e in events)
         out.append({"path": path, "id": path.stem, "when": datetime.datetime.fromtimestamp(path.stat().st_mtime),
                     "title": title[:70] + ("…" if len(title) > 70 else ""), "prompts": len(users),
@@ -211,8 +225,9 @@ def unfinished(messages):
 
 
 def render_messages(messages):
-    """The conversation as a list of items for a UI to draw: {kind: user|assistant|tool|summary, ...}. Works on messages rebuilt
-    from a log (dicts) and on live ones (SDK objects). Notes we added to a user message are left out."""
+    """The conversation as a list of items for a UI to draw: {kind: user|assistant|thinking|tool|summary, ...}. Works on messages
+    rebuilt from a log (dicts) and on live ones (SDK objects). Notes we added to a user message are left out; attached files
+    become the user item's `attachments` (names and kinds only, never their contents)."""
     items, tools_by_id = [], {}
     for m in messages:
         role, content = m["role"], m["content"]
@@ -220,8 +235,16 @@ def render_messages(messages):
             blocks = [{"type": "text", "text": content}]
         else:
             blocks = [block_to_json(b) for b in content]
+        files, pending = [], None  # pending: the name from a label, waiting for the file block after it
         for i, b in enumerate(blocks):
             kind = b.get("type")
+            if role == "user" and kind == "text" and is_attach_label(b.get("text", "")):
+                pending = b["text"][len(ATTACH_LABEL):-1]
+                continue
+            if role == "user" and pending is not None and kind in ("image", "document", "text"):
+                files.append({"name": pending, "kind": {"image": "image", "document": "pdf"}.get(kind, "text")})
+                pending = None
+                continue
             if kind == "text":
                 text = b.get("text", "")
                 if role == "user":
@@ -230,9 +253,14 @@ def render_messages(messages):
                     kind_name = "summary" if text.startswith("This conversation was compacted.") else "user"
                     if text == "[Note: the conversation was compacted into the summary above to save space. Continue the task from where you left off.]":
                         continue
-                    items.append({"kind": kind_name, "text": text})
+                    item = {"kind": kind_name, "text": text}
+                    if files and kind_name == "user":
+                        item["attachments"], files = files, []
+                    items.append(item)
                 elif text.strip():
                     items.append({"kind": "assistant", "text": text})
+            elif kind == "thinking" and (b.get("thinking") or "").strip():
+                items.append({"kind": "thinking", "text": b["thinking"]})
             elif kind in ("tool_use", "server_tool_use"):
                 item = {"kind": "tool", "id": b.get("id"), "name": b.get("name"), "input": b.get("input", {}), "result": None, "is_error": False}
                 tools_by_id[b.get("id")] = item
@@ -245,4 +273,6 @@ def render_messages(messages):
                     item["is_error"] = bool(b.get("is_error"))
             elif kind == "compaction":
                 items.append({"kind": "summary", "text": b.get("content") or ""})
+        if files:  # files sent with no typed text
+            items.append({"kind": "user", "text": "", "attachments": files})
     return items
