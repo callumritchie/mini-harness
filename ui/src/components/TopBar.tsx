@@ -37,7 +37,7 @@ export function TopBar() {
         </button>
       </header>
       <div className="contextbar" role="progressbar" aria-label="Context used" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-        <div className={`fill ${pct >= 80 ? "high" : ""}`} style={{ width: `${pct}%` }} />
+        <div className={`fill ${pct >= 80 ? "high" : ""}`} style={{ transform: `scaleX(${pct / 100})` }} />
       </div>
     </>
   );

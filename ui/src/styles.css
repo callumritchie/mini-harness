@@ -80,6 +80,9 @@
   --radius-card: 8px;         /* NEW: cards, tool groups */
   --radius-dialog: 12px;      /* NEW */
   --focus: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent);
+  /* motion: strong ease-out for anything responding to the person; durations stay under 250ms except dialogs */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --dur-press: 160ms; --dur-pop: 150ms; --dur-dialog: 200ms;
 
   /* type */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;   /* NEW */
@@ -282,7 +285,7 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
 .paused-strip { display: flex; align-items: center; gap: 10px; background: var(--accent-surface); border: 1px solid var(--accent-surface-line); color: var(--accent-ink); border-radius: var(--radius-card); padding: 8px 12px; font-size: var(--fs-md); }
 .paused-strip span:nth-child(2) { flex: 1; min-width: 0; }
 .wait-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); flex: none; display: inline-block; }
-.contextbar { height: 2px; background: var(--hover); flex: none; } .contextbar .fill { height: 100%; background: var(--text-3); transition: width .3s; } .contextbar .fill.high { background: var(--warn); }
+.contextbar { height: 2px; background: var(--hover); flex: none; } .contextbar .fill { height: 100%; width: 100%; background: var(--text-3); transform-origin: left; transition: transform 300ms var(--ease-out); } .contextbar .fill.high { background: var(--warn); }
 .settings { position: relative; }
 .pop { position: absolute; right: 0; top: calc(100% + 8px); width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 12px; z-index: 15; display: flex; flex-direction: column; gap: 12px; }
 .pop label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
@@ -413,7 +416,7 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
 .cfoot .cmds:hover { color: var(--text); }
 .chint { font-size: var(--fs-xs); color: var(--muted); margin-right: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .composer .send { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: var(--text); color: var(--bg); flex: none; }
-.composer .send:disabled { opacity: .35; }
+.composer .send:disabled { opacity: .35; } .composer .send:hover:not(:disabled) { opacity: .88; }
 .palette { position: absolute; bottom: calc(100% - 12px); left: 24px; right: 24px; list-style: none; margin: 0; padding: 4px; background: var(--raised); border: 1px solid var(--control-line); border-radius: var(--radius); box-shadow: var(--shadow); z-index: 5; }
 .palette li { padding: 6px 10px; border-radius: var(--radius-sm); cursor: pointer; display: flex; gap: 10px; font-size: var(--fs-md); } .palette li.active, .palette li:hover { background: var(--hover); } .palette span { color: var(--muted); }
 
@@ -558,7 +561,7 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
   .drawer-close { display: inline-flex; }
   .backdrop { display: block; position: fixed; inset: 0; background: var(--scrim); z-index: 9; }
 }
-@media (prefers-reduced-motion: reduce) { .spinner, .cursor { animation: none; } .contextbar .fill { transition: none; } }
+
 @media (prefers-color-scheme: dark) { .composer .box { box-shadow: 0 8px 24px rgba(0, 0, 0, .35); } }
 
 @media (prefers-color-scheme: dark) { .dialog { box-shadow: 0 16px 40px rgba(0, 0, 0, .5); } }
@@ -600,3 +603,29 @@ kbd { font-family: inherit; font-size: var(--fs-xs); background: var(--control);
 .pathlabel { display: flex; align-items: baseline; gap: 8px; min-width: 0; white-space: nowrap; }
 .pathlabel .pl-base { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pathlabel .pl-dir { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: .95em; }
+
+/* ---------- press feedback and entries (the polish pass) ----------
+   Buttons scale a touch on press so a click feels heard. Wide rows (sessions, tree, tool heads, menu items) only change background:
+   scaling a full-width row shifts its text. Keyboard-driven surfaces (the / palette, ⌘B, Shift+Tab) and tool cards, used dozens of
+   times a session, do not animate at all. Menus grow from their trigger (top right); dialogs stay centred. React unmounts on close,
+   so exits are instant, which is also the right speed for an exit. */
+.btn, .btn-icon, .perm, .setbtn, .cfoot .cmds, .composer .send, .sidebar .new { transition: transform var(--dur-press) var(--ease-out); }
+.btn:active:not(:disabled), .btn-icon:active:not(:disabled), .perm:active, .setbtn:active, .cfoot .cmds:active,
+.composer .send:active:not(:disabled), .sidebar .new:active:not(:disabled) { transform: scale(0.97); }
+
+.pop { transform-origin: top right; transition: opacity var(--dur-pop) var(--ease-out), transform var(--dur-pop) var(--ease-out); }
+@starting-style { .pop { opacity: 0; transform: scale(0.97); } }
+
+.overlay { transition: opacity var(--dur-pop) var(--ease-out); }
+@starting-style { .overlay { opacity: 0; } }
+.overlay .dialog { transition: opacity var(--dur-dialog) var(--ease-out), transform var(--dur-dialog) var(--ease-out); }
+@starting-style { .overlay .dialog { opacity: 0; transform: scale(0.96); } }
+
+/* reduced motion: no movement or scaling; the fades stay, they help you see what appeared */
+@media (prefers-reduced-motion: reduce) {
+  .spinner, .cursor { animation: none; }
+  .btn, .btn-icon, .perm, .setbtn, .cfoot .cmds, .composer .send, .sidebar .new, .contextbar .fill { transition: none; }
+  .btn:active, .btn-icon:active, .perm:active, .setbtn:active, .cfoot .cmds:active, .composer .send:active, .sidebar .new:active { transform: none; }
+  .pop, .overlay .dialog { transition: opacity var(--dur-pop) ease; }
+  @starting-style { .pop, .overlay .dialog { transform: none; } }
+}
