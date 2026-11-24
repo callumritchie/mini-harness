@@ -33,6 +33,8 @@ export function Markdown({ text }: { text: string }) {
             </a>
           ),
           pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+          // a wide table scrolls on its own instead of pushing the whole chat sideways; numbers in it never wrap
+          table: ({ children }) => <div className="table-wrap" tabIndex={0} role="region" aria-label="Table"><table>{children}</table></div>,
           img: ({ alt }) => <span className="blocked-image">[image: {alt || "not loaded"}]</span>,
         }}
       >

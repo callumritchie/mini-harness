@@ -5,6 +5,7 @@ import { Composer } from "./components/Composer";
 import { ConfirmAllow } from "./components/ConfirmAllow";
 import { GoalDialog } from "./components/GoalDialog";
 import { PermissionDialog } from "./components/PermissionDialog";
+import { DevDataToggle } from "./components/DevDataToggle";
 import { RightPanel } from "./components/RightPanel";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
@@ -28,10 +29,17 @@ export default function App() {
   const token = getToken();
 
   useEffect(() => {
-    // small screens start with both side panels closed (they open as drawers)
+    // small screens start with both side panels closed (they open as drawers). A window made narrow enough that both panels become
+    // drawers keeps the side panel the person was using and closes the session list, so two drawers never land on top of each
+    // other. The width matches the CSS breakpoint.
     const { patch } = useStore.getState();
-    if (window.innerWidth < 760) patch({ sidebarOpen: false, rightOpen: false });
-    else if (window.innerWidth < 1100) patch({ rightOpen: false });
+    if (window.innerWidth <= 760) patch({ sidebarOpen: false, rightOpen: false });
+    else if (window.innerWidth <= 1100) patch({ rightOpen: false });
+    const resized = () => {
+      const { sidebarOpen, rightOpen } = useStore.getState();
+      if (window.innerWidth <= 760 && sidebarOpen && rightOpen) patch({ sidebarOpen: false });
+    };
+    window.addEventListener("resize", resized);
     const keys = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
       if (e.key.toLowerCase() === "n") {
@@ -47,7 +55,10 @@ export default function App() {
       }
     };
     window.addEventListener("keydown", keys);
-    return () => window.removeEventListener("keydown", keys);
+    return () => {
+      window.removeEventListener("keydown", keys);
+      window.removeEventListener("resize", resized);
+    };
   }, []);
 
   useEffect(() => {
@@ -109,6 +120,7 @@ export default function App() {
         <RightPanel />
       </div>
       <PermissionDialog />
+      <DevDataToggle />
       <ConfirmAllow />
       <GoalDialog />
     </div>

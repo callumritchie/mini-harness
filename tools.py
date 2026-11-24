@@ -698,7 +698,12 @@ def outcome(name, args, text, is_error):
             return "no matches"
         n = sum(1 for line in text.split("\n") if line and not line.startswith("["))
         unit = "file" if name == "glob" else "match"
-        return f"{n:,} {unit}{'' if n == 1 else ('s' if unit == 'file' else 'es')}"
+        plural = "s" if unit == "file" else "es"
+        hidden = re.search(r"^\[(\d+) more not shown", text, re.M)
+        if hidden:  # the list was cut: say how many there are, not how many were listed
+            return f"{n:,} of {n + int(hidden.group(1)):,} {unit}{plural}"
+        stopped = "+" if re.search(r"^\[Search stopped after", text, re.M) else ""  # only part of what matches
+        return f"{n:,}{stopped} {unit}{'' if n == 1 and not stopped else plural}"
     if name == "ask_user":
         m = re.match(r"The user answered: (.*)", text, re.S)
         if m:

@@ -162,7 +162,7 @@ test("the whole demo walk-through", async ({ page }) => {
   await expect(page.locator(".diff-body.wrap")).toBeVisible();
   await page.screenshot({ path: shot("19-diff-modified") });
   await page.setViewportSize({ width: 420, height: 800 }); // the side panel becomes a drawer; long lines wrap inside it
-  await page.getByRole("button", { name: "Close sessions" }).click();
+  await expect(page.locator(".sidebar")).toHaveCount(0); // two drawers would overlap: the session list closes, the panel in use stays
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
   await page.screenshot({ path: shot("20-diff-narrow") });
   await page.setViewportSize({ width: 1440, height: 900 });
